@@ -239,6 +239,11 @@ impl PriceService {
         self.trade.use_listing_token(&self.http, token, league, session).await
     }
 
+    /// Every currency listings can be priced in, by id ("alch" → Orb of Alchemy).
+    pub async fn currencies(&self) -> Result<std::collections::HashMap<String, stats::Currency>, String> {
+        Ok(self.stat_index().await?.currencies().clone())
+    }
+
     /// The account a session belongs to ("name#1234"); an error when the site doesn't
     /// accept it. Read from the account page, which answers 401 when signed out.
     pub async fn account_name(&self, session: &str) -> Result<String, String> {

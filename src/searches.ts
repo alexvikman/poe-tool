@@ -38,8 +38,27 @@ export interface HitItem {
   itemLevel: number | null;
   corrupted: boolean;
   sockets: string | null;
-  properties: string[];
+  properties: HitProperty[];
+  /** "Level 8, 42 Dex". */
+  requirements: string | null;
   mods: HitMod[];
+  unidentified: boolean;
+  mirrored: boolean;
+  /** The seller's note, "~b/o 1 alch". */
+  note: string | null;
+}
+
+/** "Quality: +20%" is label "Quality", value "+20%"; some lines come whole as the label. */
+export interface HitProperty {
+  label: string;
+  value: string | null;
+  /** Changed by the item's mods: the game shows it blue. */
+  augmented: boolean;
+}
+
+export interface Currency {
+  name: string;
+  icon: string | null;
 }
 
 export interface LiveHit {
@@ -52,6 +71,8 @@ export interface LiveHit {
   item: HitItem;
   amount: number | null;
   currency: string | null;
+  /** "~b/o" or "~price". */
+  priceType: string | null;
   account: string;
   hideoutToken: string | null;
   whisperToken: string | null;
@@ -92,6 +113,9 @@ export const setSession = (value: string) => invoke<SessionStatus>("session_set"
 export const clearSession = () => invoke<void>("session_clear");
 /** Opens pathofexile.com's sign-in in a window; resolves once signed in. */
 export const signIn = () => invoke<SessionStatus>("session_sign_in");
+
+/** Currencies listings are priced in, by id ("alch" → Orb of Alchemy). */
+export const tradeCurrencies = () => read<Record<string, Currency>>("trade_currencies");
 
 export const liveState = () => read<[Record<string, LiveStatus>, LiveHit[]]>("live_state");
 /** Travel to the seller's hideout, or whisper them: says which it did. */

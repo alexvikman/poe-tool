@@ -270,6 +270,13 @@ async fn session_clear(app: AppHandle, state: State<'_, AppState>) -> Result<(),
 }
 
 #[tauri::command]
+async fn trade_currencies(
+    state: State<'_, AppState>,
+) -> Result<HashMap<String, price::stats::Currency>, String> {
+    state.price.currencies().await
+}
+
+#[tauri::command]
 fn live_state(state: State<AppState>) -> (std::collections::HashMap<String, LiveStatus>, Vec<LiveHit>) {
     (state.live.statuses(), state.live.hits())
 }
@@ -517,6 +524,7 @@ pub fn run() {
             session_sign_in,
             session_clear,
             live_state,
+            trade_currencies,
             live_act
         ])
         .build(tauri::generate_context!())

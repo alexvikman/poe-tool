@@ -58,6 +58,15 @@ pub struct StaticGroup {
 pub struct StaticEntry {
     pub id: String,
     pub text: Option<String>,
+    /// A path on the image server ("/gen/image/…").
+    pub image: Option<String>,
+}
+
+/// A currency as listings price in it: "alch" is Orb of Alchemy, with its picture.
+#[derive(Debug, Clone, Serialize)]
+pub struct Currency {
+    pub name: String,
+    pub icon: Option<String>,
 }
 
 /// One filter of a trade search, shown to the user as a row they can turn on or off.
@@ -92,6 +101,8 @@ pub struct StatIndex {
     transfigured: HashMap<String, (String, String)>,
     /// Bulk item name (lower case) → its id on the currency exchange ("divine").
     exchange_ids: HashMap<String, String>,
+    /// Exchange id → the currency's name and picture.
+    currencies: HashMap<String, Currency>,
 }
 
 impl StatIndex {
@@ -120,7 +131,7 @@ impl StatIndex {
             .flat_map(|g| &g.entries)
             .filter_map(|e| Some((e.text.as_ref()?.to_lowercase(), (e.base.clone(), e.disc.clone()?))))
             .collect();
-        StatIndex { by_text, bases, transfigured, exchange_ids: HashMap::new() }
+        StatIndex { by_text, bases, transfigured, exchange_ids: HashMap::new(), currencies: HashMap::new() }
     }
 
     pub fn with_exchange(mut self, statics: &StaticResponse) -> Self {
@@ -130,7 +141,17 @@ impl StatIndex {
             .flat_map(|g| &g.entries)
             .filter_map(|e| Some((e.text.as_ref()?.to_lowercase(), e.id.clone())))
             .collect();
+        // The first group is currency; later groups reuse a few ids for other things.
+        for e in statics.result.iter().flat_map(|g| &g.entries) {
+            let Some(name) = e.text.clone() else { continue };
+            let icon = e.image.as_ref().map(|path| format!("https://web.poecdn.com{path}"));
+            self.currencies.entry(e.id.clone()).or_insert(Currency { name, icon });
+        }
         self
+    }
+
+    pub fn currencies(&self) -> &HashMap<String, Currency> {
+        &self.currencies
     }
 
     /// The currency exchange's id for a bulk item, such as "divine" for Divine Orb.

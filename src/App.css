@@ -1288,6 +1288,7 @@ select {
 /* Found listings */
 
 .feed {
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1314,9 +1315,10 @@ select {
 
 .hit-card {
   display: grid;
-  grid-template-columns: 64px minmax(0, 1fr) 200px;
-  gap: 16px;
-  padding: 12px 14px;
+  grid-template-columns: 72px minmax(0, 1fr) 220px;
+  gap: 18px;
+  align-items: start;
+  padding: 14px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--panel);
@@ -1326,70 +1328,143 @@ select {
   opacity: 0.45;
 }
 
+/* Narrow: price and buttons go under the item, so the item keeps its width. */
+@container (max-width: 680px) {
+  .hit-card {
+    grid-template-columns: 56px minmax(0, 1fr);
+  }
+
+  .hit-card .hit-side {
+    grid-column: 2;
+    align-items: center;
+    text-align: center;
+  }
+
+  .hit-icon img {
+    max-width: 56px;
+  }
+}
+
 .hit-icon {
   display: flex;
-  justify-content: center;
-  align-items: flex-start;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
 }
 
 .hit-icon img {
-  max-width: 64px;
-  max-height: 128px;
+  max-width: 72px;
+  max-height: 144px;
 }
 
-.hit-body {
-  min-width: 0;
+/* Sockets */
+
+.sockets {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+}
+
+.socket-group,
+.socket-wrap {
+  display: inline-flex;
+  align-items: center;
+}
+
+.socket {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.6);
+  background: #ddd;
+}
+
+.socket-link {
+  width: 5px;
+  height: 3px;
+  background: #b9a578;
+}
+
+.socket-R { background: #c43c3c; }
+.socket-G { background: #5fa53b; }
+.socket-B { background: #4876d6; }
+.socket-W { background: #e8e8e8; }
+.socket-A { background: #4a4a4a; }
+.socket-D { background: #9b9b9b; }
+
+/* An item as the game's tooltip shows it */
+
+.tooltip {
+  --rarity: #c8c8c8;
+  --rarity-dim: rgba(200, 200, 200, 0.35);
+  /* Fills the middle, as on the trade site. */
+  align-self: stretch;
+  background: rgba(0, 0, 0, 0.88);
+  border: 1px solid var(--rarity-dim);
+  text-align: center;
+  font-family: Georgia, "Times New Roman", serif;
+  font-variant: small-caps;
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.tooltip.rarity-magic { --rarity: #8888ff; --rarity-dim: rgba(136, 136, 255, 0.35); }
+.tooltip.rarity-rare { --rarity: #ffff77; --rarity-dim: rgba(255, 255, 119, 0.3); }
+.tooltip.rarity-unique { --rarity: #af6025; --rarity-dim: rgba(175, 96, 37, 0.55); }
+.tooltip.rarity-gem { --rarity: #1ba29b; --rarity-dim: rgba(27, 162, 155, 0.45); }
+.tooltip.rarity-currency { --rarity: #aa9e82; --rarity-dim: rgba(170, 158, 130, 0.45); }
+.tooltip.rarity-card { --rarity: #c4d7e5; --rarity-dim: rgba(196, 215, 229, 0.4); }
+.tooltip.rarity-relic { --rarity: #82ad6a; --rarity-dim: rgba(130, 173, 106, 0.45); }
+
+.tt-head {
+  padding: 6px 12px;
+  color: var(--rarity);
+  font-size: 17px;
+  letter-spacing: 0.02em;
+  border-bottom: 1px solid var(--rarity-dim);
+  background:
+    linear-gradient(90deg, transparent, color-mix(in srgb, var(--rarity) 14%, transparent) 50%, transparent),
+    #0b0806;
+}
+
+.tt-body {
+  padding: 6px 14px 8px;
+}
+
+.tt-section {
   display: flex;
   flex-direction: column;
-  gap: 2px;
 }
 
-.hit-title {
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: 15px;
-  color: var(--text);
+.tt-sep {
+  border: 0;
+  height: 1px;
+  margin: 6px auto;
+  width: 70%;
+  background: linear-gradient(90deg, transparent, var(--rarity-dim), transparent);
 }
 
-.hit-title.rarity-unique { color: #d98a4c; }
-.hit-title.rarity-rare { color: #e5d36a; }
-.hit-title.rarity-magic { color: #9b9bff; }
-.hit-title.rarity-gem { color: #1ba29b; }
-.hit-title.rarity-currency { color: #aa9e82; }
-.hit-title.rarity-card { color: #c4d7e5; }
-.hit-title.rarity-relic { color: #82ad6a; }
-
-.hit-base {
-  color: var(--text-dim);
-}
-
-.hit-mods {
-  list-style: none;
-  margin: 4px 0 0;
-  padding: 0;
-  font-size: 13px;
-  color: #8888ff;
-  columns: 2 280px;
-  column-gap: 24px;
-}
-
-.hit-mods li {
-  break-inside: avoid;
-}
-
-.hit-mods .mod-implicit,
-.hit-mods .mod-enchant { color: #b4b4ff; }
-.hit-mods .mod-crafted { color: #b4b4ff; font-style: italic; }
-.hit-mods .mod-fractured { color: #a29162; }
-.hit-mods .mod-mutated { color: #c96fd8; }
+.tt-label { color: #7f7f7f; }
+.tt-value { color: #fff; }
+.tt-augmented { color: #8888ff; }
+.tt-mod { color: #8888ff; }
+.tt-mod.mod-implicit,
+.tt-mod.mod-enchant,
+.tt-mod.mod-crafted { color: #b4b4ff; }
+.tt-mod.mod-fractured { color: #a29162; }
+.tt-mod.mod-mutated { color: #c96fd8; }
+.tt-corrupted { color: #d20000; }
+.tt-unidentified { color: #d20000; }
+.tt-note { color: #aa9e82; }
 
 .mod-range {
-  color: var(--text-dim);
+  color: #6f6f6f;
   font-size: 12px;
+  font-variant: normal;
 }
 
-.corrupted {
-  color: var(--bad);
-}
+/* Price and seller, beside the item */
 
 .hit-side {
   display: flex;
@@ -1400,14 +1475,25 @@ select {
 }
 
 .hit-side .btn {
-  margin-top: 4px;
+  margin-top: 6px;
 }
 
 .hit-price {
-  color: var(--accent);
-  font-size: 16px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text);
+  font-size: 15px;
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
+}
+
+.currency-icon {
+  width: 26px;
+  height: 26px;
+}
+
+.seller {
+  color: var(--text);
 }
 
 .good {

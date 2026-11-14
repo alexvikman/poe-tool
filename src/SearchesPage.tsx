@@ -17,6 +17,9 @@ import {
   setSession,
   signIn,
   updateSearch,
+  tradeCurrencies,
+  type Currency,
+  type HitMod,
   type LiveHit,
   type LiveStatus,
   type SavedSearch,
@@ -592,10 +595,25 @@ function HitFeed({ hits, searches }: { hits: LiveHit[]; searches: SavedSearch[] 
   );
 }
 
+let currencies: Promise<Record<string, Currency>> | null = null;
+
+/** Currency names and pictures, fetched once. */
+function useCurrencies(): Record<string, Currency> {
+  const [map, setMap] = useState<Record<string, Currency>>({});
+  useEffect(() => {
+    currencies ??= tradeCurrencies().catch(() => {
+      currencies = null; // Try again next time.
+      return {};
+    });
+    currencies.then(setMap);
+  }, []);
+  return map;
+}
+
 function HitCard({ hit }: { hit: LiveHit }) {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ text: string; bad: boolean } | null>(null);
-  const { item } = hit;
+  const currency = useCurrencies()[hit.currency ?? ""];
 
   async function act() {
     setBusy(true);
@@ -610,39 +628,31 @@ function HitCard({ hit }: { hit: LiveHit }) {
     }
   }
 
-  const facts = [item.itemLevel != null && `Item level ${item.itemLevel}`, item.sockets, ...item.properties].filter(
-    Boolean,
-  ) as string[];
-
   return (
     <article className={`hit-card ${hit.gone ? "gone" : ""}`}>
-      <div className="hit-icon">{item.icon && <img src={item.icon} alt="" loading="lazy" />}</div>
-      <div className="hit-body">
-        <div className={`hit-title rarity-${item.rarity}`}>
-          {item.name || item.typeLine}
-          {item.name && <span className="hit-base"> {item.typeLine}</span>}
-        </div>
-        {facts.length > 0 && <div className="muted small">{facts.join(" · ")}</div>}
-        {item.mods.length > 0 && (
-          <ul className="hit-mods">
-            {item.mods.map((m, i) => (
-              <li key={i} className={`mod-${m.kind}`}>
-                {m.text}
-                {m.range && <span className="mod-range"> ({m.range})</span>}
-              </li>
-            ))}
-          </ul>
-        )}
-        {item.corrupted && <div className="corrupted small">Corrupted</div>}
+      <div className="hit-icon">
+        {hit.item.icon && <img src={hit.item.icon} alt="" loading="lazy" />}
+        {hit.item.sockets && <Sockets sockets={hit.item.sockets} />}
       </div>
+      <ItemTooltip hit={hit} />
       <div className="hit-side">
-        <div className="hit-price">{hit.amount != null ? `${hit.amount} ${hit.currency}` : "No price"}</div>
+        <span className="muted small">{hit.priceType === "~price" ? "Asking price" : "Buyout"}</span>
+        <div className="hit-price">
+          {hit.amount == null ? (
+            "No price"
+          ) : (
+            <>
+              {hit.amount}×{currency?.icon && <img className="currency-icon" src={currency.icon} alt="" />}
+              <span>{currency?.name ?? hit.currency}</span>
+            </>
+          )}
+        </div>
         <small className="muted">
-          {hit.account} · {since(hit.seen)}
+          <span className="seller">{hit.account}</span> · listed {since(hit.seen)}
         </small>
         <small className="muted">{hit.searchName}</small>
         {hit.gone ? (
-          <span className="bad small">No longer available</span>
+          <span className="bad small">Item no longer available</span>
         ) : hit.hideoutToken ? (
           <button className="btn primary small-btn" disabled={busy} onClick={act}>
             {busy ? "…" : "Travel to hideout"}
@@ -659,5 +669,111 @@ function HitCard({ hit }: { hit: LiveHit }) {
         {note && <small className={note.bad ? "bad" : "good"}>{note.text}</small>}
       </div>
     </article>
+  );
+}
+
+/** The item as the game's tooltip shows it: a header, then sections with lines between. */
+function ItemTooltip({ hit }: { hit: LiveHit }) {
+  const { item } = hit;
+  const named = item.name && item.rarity !== "magic" && item.rarity !== "normal";
+  const mods = (kinds: HitMod["kind"][]) => item.mods.filter((m) => kinds.includes(m.kind));
+
+  const sections: React.ReactNode[] = [];
+  if (item.properties.length > 0) {
+    sections.push(
+      item.properties.map((p, i) => (
+        <div key={i}>
+          {p.value == null ? (
+            <span className="tt-label">{p.label}</span>
+          ) : (
+            <>
+              <span className="tt-label">{p.label}: </span>
+              <span className={p.augmented ? "tt-augmented" : "tt-value"}>{p.value}</span>
+            </>
+          )}
+        </div>
+      )),
+    );
+  }
+  if (item.itemLevel != null || item.requirements) {
+    sections.push(
+      <>
+        {item.itemLevel != null && (
+          <div>
+            <span className="tt-label">Item Level: </span>
+            <span className="tt-value">{item.itemLevel}</span>
+          </div>
+        )}
+        {item.requirements && (
+          <div>
+            <span className="tt-label">Requires </span>
+            <span className="tt-value">{item.requirements}</span>
+          </div>
+        )}
+      </>,
+    );
+  }
+  for (const kinds of [["enchant"], ["implicit"], ["fractured", "explicit", "crafted", "mutated"]] as HitMod["kind"][][]) {
+    const lines = mods(kinds);
+    if (lines.length > 0) {
+      sections.push(
+        lines.map((m, i) => (
+          <div key={i} className={`tt-mod mod-${m.kind}`}>
+            {m.text}
+            {m.range && <span className="mod-range"> ({m.range})</span>}
+          </div>
+        )),
+      );
+    }
+  }
+  const flags = [
+    item.unidentified && <div key="u" className="tt-unidentified">Unidentified</div>,
+    item.mirrored && <div key="m" className="tt-mod">Mirrored</div>,
+    item.corrupted && <div key="c" className="tt-corrupted">Corrupted</div>,
+  ].filter(Boolean);
+  if (flags.length > 0) sections.push(flags);
+  const priceNote =
+    item.note ?? (hit.amount != null ? `${hit.priceType ?? "~price"} ${hit.amount} ${hit.currency}` : null);
+  if (priceNote) sections.push(<div className="tt-note">{priceNote}</div>);
+
+  return (
+    <div className={`tooltip rarity-${item.rarity}`}>
+      <header className={`tt-head ${named ? "double" : ""}`}>
+        {named ? (
+          <>
+            <div>{item.name}</div>
+            <div>{item.typeLine}</div>
+          </>
+        ) : (
+          <div>{item.typeLine || item.name}</div>
+        )}
+      </header>
+      <div className="tt-body">
+        {sections.map((section, i) => (
+          <div key={i} className="tt-section">
+            {i > 0 && <hr className="tt-sep" />}
+            {section}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Sockets in the game's colours, linked ones joined: "R-G-B B". */
+function Sockets({ sockets }: { sockets: string }) {
+  return (
+    <div className="sockets" title={`Sockets: ${sockets}`}>
+      {sockets.split(" ").map((group, g) => (
+        <span key={g} className="socket-group">
+          {group.split("-").map((colour, i) => (
+            <span key={i} className="socket-wrap">
+              {i > 0 && <span className="socket-link" />}
+              <span className={`socket socket-${colour}`} />
+            </span>
+          ))}
+        </span>
+      ))}
+    </div>
   );
 }

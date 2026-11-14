@@ -38,6 +38,11 @@ const CATEGORIES: &[(&str, &str, &str)] = &[
     ("Tinctures", "tincture", "Tincture"),
 ];
 
+/// A label for a trade site category id: "weapon.twosword" → "Two-Handed Sword".
+pub fn category_label(id: &str) -> Option<&'static str> {
+    CATEGORIES.iter().find(|(_, c, _)| *c == id).map(|(_, _, label)| *label)
+}
+
 /// The trade site's category id and a label, for an item class.
 pub fn trade_category(item_class: &str) -> Option<(&'static str, &'static str)> {
     CATEGORIES

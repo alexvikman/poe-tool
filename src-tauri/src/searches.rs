@@ -143,17 +143,26 @@ pub fn decode_search_id(id: &str) -> Result<Value, String> {
     serde_json::from_str(&json).map_err(|_| unreadable())
 }
 
-/// "The Ignomon", "Two-Toned Boots", "Two-Handed Sword", …
+/// What a search looks for, as the trade site shows it: "The Ignomon Gold Amulet",
+/// "Two-Toned Boots", "Two-Handed Sword" (a category), or the typed search text.
 pub fn default_name(body: &Value) -> String {
     let q = &body["query"];
     let text = |v: &Value| match v {
-        Value::String(s) => Some(s.clone()),
-        Value::Object(o) => o.get("option").and_then(|v| v.as_str()).map(str::to_string),
+        Value::String(s) => Some(s.trim().to_string()),
+        Value::Object(o) => o.get("option").and_then(|v| v.as_str()).map(|s| s.trim().to_string()),
         _ => None,
-    };
-    text(&q["name"])
-        .or_else(|| text(&q["type"]))
-        .or_else(|| q["filters"]["type_filters"]["filters"]["category"]["option"].as_str().map(str::to_string))
+    }
+    .filter(|s| !s.is_empty());
+    let item = [text(&q["name"]), text(&q["type"])].into_iter().flatten().collect::<Vec<_>>().join(" ");
+    if !item.is_empty() {
+        return item;
+    }
+    if let Some(term) = text(&q["term"]) {
+        return term;
+    }
+    q["filters"]["type_filters"]["filters"]["category"]["option"]
+        .as_str()
+        .map(|c| crate::price::category::category_label(c).map(str::to_string).unwrap_or_else(|| c.to_string()))
         .unwrap_or_else(|| "Search".into())
 }
 
@@ -198,7 +207,7 @@ mod tests {
         assert_eq!(s.body["query"]["name"], "The Ignomon");
         assert_eq!(s.body["query"]["type"], "Gold Amulet");
         assert_eq!(s.body["query"]["stats"][0]["filters"][3]["disabled"], true);
-        assert_eq!(default_name(&s.body), "The Ignomon");
+        assert_eq!(default_name(&s.body), "The Ignomon Gold Amulet");
         assert!(!s.live);
     }
 
@@ -217,6 +226,8 @@ mod tests {
     #[test]
     fn names_category_searches() {
         let body = json!({ "query": { "filters": { "type_filters": { "filters": { "category": { "option": "weapon.twosword" } } } } } });
-        assert_eq!(default_name(&body), "weapon.twosword");
+        assert_eq!(default_name(&body), "Two-Handed Sword");
+        assert_eq!(default_name(&json!({ "query": { "type": "Two-Toned Boots" } })), "Two-Toned Boots");
+        assert_eq!(default_name(&json!({ "query": { "term": "Mageblood" } })), "Mageblood");
     }
 }

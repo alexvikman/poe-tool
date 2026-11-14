@@ -42,6 +42,8 @@ pub struct LiveHit {
     pub item: HitItem,
     pub amount: Option<f64>,
     pub currency: Option<String>,
+    /// "~b/o" (buyout) or "~price" (asking price).
+    pub price_type: Option<String>,
     pub account: String,
     /// Instant buyout listings: travel to the seller's hideout to buy.
     pub hideout_token: Option<String>,
@@ -73,9 +75,25 @@ pub struct HitItem {
     pub corrupted: bool,
     /// Sockets as the game links them: "R-G-B B".
     pub sockets: Option<String>,
-    /// Quality, gem level and the like.
-    pub properties: Vec<String>,
+    /// Quality, armour, gem level and the like.
+    pub properties: Vec<HitProperty>,
+    /// "Level 8, 42 Dex".
+    pub requirements: Option<String>,
     pub mods: Vec<HitMod>,
+    pub unidentified: bool,
+    pub mirrored: bool,
+    /// The seller's note, "~b/o 1 alch".
+    pub note: Option<String>,
+}
+
+/// A property line: "Quality: +20%" is label "Quality" and value "+20%"; lines
+/// like "Stack Size: 3/10" with the values inside them come whole, as the label.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct HitProperty {
+    pub label: String,
+    pub value: Option<String>,
+    /// The value is changed by the item's mods (the game shows it blue).
+    pub augmented: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -367,6 +385,7 @@ fn read_hit(raw: &Value, group: &str, search: &SavedSearch, query_id: &str) -> O
         item: read_item(&raw["item"]),
         amount: listing["price"]["amount"].as_f64(),
         currency: s(&listing["price"]["currency"]),
+        price_type: s(&listing["price"]["type"]),
         account: s(&listing["account"]["name"]).unwrap_or_default(),
         hideout_token: s(&listing["hideout_token"]),
         whisper_token: s(&listing["whisper_token"]),
@@ -403,6 +422,16 @@ fn read_item(item: &Value) -> HitItem {
         .flatten()
         .filter_map(property)
         .collect();
+    let requirements: Vec<String> = item["requirements"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|r| {
+            let name = strip_markup(r["name"].as_str()?);
+            let value = r["values"][0][0].as_str()?;
+            Some(if name == "Level" { format!("Level {value}") } else { format!("{value} {name}") })
+        })
+        .collect();
     HitItem {
         name: text(&item["name"]),
         type_line: text(&item["typeLine"]),
@@ -421,7 +450,11 @@ fn read_item(item: &Value) -> HitItem {
         corrupted: item["corrupted"].as_bool() == Some(true),
         sockets: sockets(&item["sockets"]),
         properties,
+        requirements: (!requirements.is_empty()).then(|| requirements.join(", ")),
         mods,
+        unidentified: item["identified"].as_bool() == Some(false),
+        mirrored: item["duplicated"].as_bool() == Some(true),
+        note: item["note"].as_str().filter(|s| !s.is_empty()).map(str::to_string),
     }
 }
 
@@ -440,24 +473,26 @@ fn roll_range(m: &Value) -> Option<String> {
 }
 
 /// "Quality: +20%", "Level: 21". Skips the item class line and other bare names.
-fn property(p: &Value) -> Option<String> {
-    let name = strip_markup(p["name"].as_str()?);
-    let values: Vec<String> = p["values"]
+fn property(p: &Value) -> Option<HitProperty> {
+    let label = strip_markup(p["name"].as_str()?);
+    let values: Vec<(&str, bool)> = p["values"]
         .as_array()?
         .iter()
-        .filter_map(|v| v[0].as_str().map(str::to_string))
+        .filter_map(|v| Some((v[0].as_str()?, v[1].as_u64() == Some(1))))
         .collect();
     if values.is_empty() {
         return None;
     }
-    if name.contains("{0}") {
-        let mut out = name;
-        for (i, v) in values.iter().enumerate() {
-            out = out.replace(&format!("{{{i}}}"), v);
+    let augmented = values.iter().any(|(_, a)| *a);
+    if label.contains("{0}") {
+        let mut whole = label;
+        for (i, (v, _)) in values.iter().enumerate() {
+            whole = whole.replace(&format!("{{{i}}}"), v);
         }
-        return Some(out);
+        return Some(HitProperty { label: whole, value: None, augmented });
     }
-    Some(format!("{name}: {}", values.join(", ")))
+    let value = values.iter().map(|(v, _)| *v).collect::<Vec<_>>().join(", ");
+    Some(HitProperty { label, value: Some(value), augmented })
 }
 
 fn sockets(v: &Value) -> Option<String> {
@@ -607,6 +642,8 @@ mod tests {
             "sockets": [{"group":0,"sColour":"W"},{"group":0,"sColour":"W"},{"group":1,"sColour":"R"}],
             "properties": [{"name":"Body Armours","values":[]},{"name":"Quality","values":[["+20%",1]]},
                            {"name":"Stack Size: {0}/{1}","values":[["3",0],["10",0]]}],
+            "requirements": [{"name":"Level","values":[["8",0]]},{"name":"Dex","values":[["42",0]]}],
+            "note": "~b/o 1 alch",
             "implicitMods": ["+2 to Level of Socketed [Duration] Gems"],
             "explicitMods": ["[ItemRarity|Rarity] of Items found",
                 {"description": "Supported by Level 15 [SupportTrap::15|Trap Support]", "mods": [{"magnitudes": [{"min":"15","max":"15"}]}]},
@@ -615,7 +652,14 @@ mod tests {
         let r = read_item(&item);
         assert_eq!(r.rarity, "unique");
         assert_eq!(r.sockets.as_deref(), Some("W-W R"));
-        assert_eq!(r.properties, vec!["Quality: +20%", "Stack Size: 3/10"]);
+        let p = |label: &str, value: Option<&str>, augmented| HitProperty {
+            label: label.into(),
+            value: value.map(Into::into),
+            augmented,
+        };
+        assert_eq!(r.properties, vec![p("Quality", Some("+20%"), true), p("Stack Size: 3/10", None, false)]);
+        assert_eq!(r.requirements.as_deref(), Some("Level 8, 42 Dex"));
+        assert_eq!(r.note.as_deref(), Some("~b/o 1 alch"));
         assert_eq!(r.mods[0].text, "+2 to Level of Socketed Duration Gems");
         assert_eq!(r.mods[0].kind, "implicit");
         assert_eq!(r.mods[1].text, "Rarity of Items found");

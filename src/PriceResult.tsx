@@ -251,7 +251,10 @@ export function PriceResult({ check }: { check: PriceCheck }) {
         </div>
         {saving && (
           <SaveSearch
-            defaultName={title ?? check.baseType}
+            defaultName={
+              // As the trade site names the search: "The Ignomon Gold Amulet"; a rare's own name means nothing there.
+              item.rarity === "unique" && item.name ? `${item.name} ${check.baseType}` : check.baseType
+            }
             onSave={async (groupId, name) => {
               await saveCheckSearch({
                 groupId,
