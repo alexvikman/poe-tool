@@ -175,12 +175,20 @@ pub fn decode_search_id(id: &str) -> Result<Value, String> {
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(id.trim_end_matches('='))
         .map_err(|_| unreadable())?;
+    // Unpacked with a ceiling: a short link can be made to unpack to gigabytes.
     let mut json = String::new();
     flate2::read::GzDecoder::new(&bytes[..])
+        .take(MAX_QUERY_BYTES + 1)
         .read_to_string(&mut json)
         .map_err(|_| unreadable())?;
+    if json.len() as u64 > MAX_QUERY_BYTES {
+        return Err("That link holds far more than a search.".into());
+    }
     serde_json::from_str(&json).map_err(|_| unreadable())
 }
+
+/// The most a search link's id may unpack to (a big search is a few kilobytes).
+const MAX_QUERY_BYTES: u64 = 1024 * 1024;
 
 /// What a search looks for, as the trade site shows it: "The Ignomon Gold Amulet",
 /// "Two-Toned Boots", "Two-Handed Sword" (a category), or the typed search text.
@@ -260,6 +268,20 @@ mod tests {
     fn rejects_other_links() {
         assert!(from_link("https://poe.ninja/economy", "").is_err());
         assert!(from_link("https://www.pathofexile.com/trade/search/Covens/Wn8bkzVcm", "").is_err());
+    }
+
+    #[test]
+    fn stops_unpacking_a_link_at_the_limit() {
+        use std::io::Write;
+        // 64 MB of spaces around a query packs down to a link of a few dozen kilobytes.
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+        gz.write_all(b"{\"type\":\"Gold Amulet\"").unwrap();
+        gz.write_all(&vec![b' '; 64 * 1024 * 1024]).unwrap();
+        gz.write_all(b"}").unwrap();
+        let id = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(gz.finish().unwrap());
+        assert!(id.len() < 200_000);
+        let err = from_link(&format!("https://www.pathofexile.com/trade/search/Covens/{id}"), "").unwrap_err();
+        assert!(err.contains("far more than a search"), "{err}");
     }
 
     #[test]
