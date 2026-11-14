@@ -1159,6 +1159,7 @@ select {
 }
 
 .searches-main {
+  container-type: inline-size;
   overflow-y: auto;
   padding: 24px 28px 40px;
   display: flex;
@@ -1260,11 +1261,509 @@ select {
   border-bottom: 1px solid var(--line);
 }
 
-.add-search {
+/* A build: its searches listed on the left, the open one beside them */
+
+.board {
   display: grid;
-  grid-template-columns: 1fr 180px auto;
+  grid-template-columns: 290px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.board.editing {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.board.editing .search-list {
+  display: none;
+}
+
+.search-list {
+  position: sticky;
+  top: 0;
+  max-height: calc(100vh - 150px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.search-item {
+  all: unset;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   gap: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.search-item:hover {
+  background: var(--panel-2);
+}
+
+.search-item.active {
+  background: var(--panel-2);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.search-item-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.search-item-name {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-item-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.add-search {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 4px 4px;
+  margin-top: 6px;
+  border-top: 1px solid var(--line);
+}
+
+.add-search .hint {
+  margin: 0;
+  font-size: 11px;
+}
+
+.search-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.pane-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px 16px;
+}
+
+/* Narrow: the search list goes above the open search. */
+@container (max-width: 860px) {
+  .board {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .search-list {
+    position: static;
+    max-height: 260px;
+  }
+}
+
+.pane-title {
+  min-width: 0;
+}
+
+.pane-title h2 {
+  margin: 0;
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: normal;
+  font-size: 20px;
+}
+
+.pane-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.live-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 4px;
+  cursor: pointer;
+}
+
+/* A search's tabs: live finds, listed now, edit filters */
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--line);
+}
+
+.tab {
+  all: unset;
+  padding: 7px 14px;
+  color: var(--text-dim);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+.tab.on {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+/* The Search view */
+
+.search-summary {
+  all: unset;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
   padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  cursor: pointer;
+}
+
+.search-summary:hover {
+  border-color: var(--accent-dim);
+}
+
+.search-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.search-actions .spacer {
+  flex: 1;
+}
+
+.search-actions select,
+.search-actions input[type="text"] {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font: inherit;
+}
+
+.load-more {
+  align-self: center;
+  min-width: 160px;
+}
+
+/* Editing a search */
+
+.edit-search {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--accent-dim);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.edit-search label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.edit-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.edit-search input[type="text"],
+.edit-search select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font: inherit;
+}
+
+/* The trade site's search form */
+
+.search-form {
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.search-form input[type="text"],
+.search-form select {
+  background: #0b0a09;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 5px 7px;
+  font: inherit;
+  font-size: 13px;
+  min-width: 0;
+}
+
+.sf-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 170px 230px;
+  gap: 8px;
+}
+
+.sf-item {
+  position: relative;
+  display: flex;
+}
+
+.sf-item input {
+  flex: 1;
+}
+
+/* The chosen item, shown as the field's value until something is typed. */
+.sf-current {
+  position: absolute;
+  inset: 1px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px 0 8px;
+  pointer-events: none;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.sf-current .icon-btn {
+  pointer-events: auto;
+}
+
+.sf-suggest {
+  position: absolute;
+  z-index: 20;
+  top: 100%;
+  left: 0;
+  right: 0;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--panel-2);
+  border: 1px solid var(--accent-dim);
+  border-radius: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.sf-suggest button {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 5px 10px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.sf-suggest button:hover {
+  background: var(--panel);
+}
+
+.sf-unique {
+  color: #d98a4c;
+}
+
+.sf-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+@container (max-width: 900px) {
+  .sf-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sf-top {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.sf-groups,
+.sf-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sf-group-head {
+  all: unset;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 2px;
+  border-bottom: 1px solid var(--line);
+  font-family: Georgia, "Times New Roman", serif;
+  font-variant: small-caps;
+  font-size: 15px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.sf-group-head.static {
+  cursor: default;
+}
+
+.sf-group-head input {
+  accent-color: var(--accent);
+  pointer-events: none;
+}
+
+.sf-group.off .sf-group-head {
+  color: var(--text-dim);
+}
+
+.sf-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 3px 6px;
+  padding: 6px 0 8px 22px;
+}
+
+.sf-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  background: #0b0a09;
+  border: 1px solid #1d1a16;
+  padding: 2px 2px 2px 9px;
+}
+
+.sf-field.full {
+  grid-column: 1 / -1;
+}
+
+.sf-label {
+  font-family: Georgia, "Times New Roman", serif;
+  font-variant: small-caps;
+  color: #c7b48d;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sf-control {
+  display: flex;
+  gap: 3px;
+}
+
+.search-form .sf-num {
+  width: 52px;
+  text-align: center;
+}
+
+.search-form .sf-text {
+  width: 220px;
+}
+
+.sf-socket input {
+  width: 34px !important;
+}
+
+.sf-socket-r input { color: #e05a5a; }
+.sf-socket-g input { color: #7bc35a; }
+.sf-socket-b input { color: #6c8cf0; }
+
+.sf-stat-group {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.sf-stat-group.off {
+  opacity: 0.6;
+}
+
+.sf-stat-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sf-stat-group-head .icon-btn {
+  margin-left: auto;
+}
+
+.sf-stat {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px;
+  background: #0b0a09;
+  border: 1px solid #1d1a16;
+}
+
+.sf-stat.off .sf-stat-text {
+  color: var(--text-dim);
+}
+
+.sf-stat input[type="checkbox"],
+.sf-stat-group-head input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+
+.sf-stat-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: #8888ff;
+}
+
+.sf-stat-type {
+  color: var(--text-dim);
+  font-size: 11px;
+  text-transform: capitalize;
+}
+
+.sf-stat-option {
+  max-width: 160px;
+}
+
+.sf-stat-picker {
+  margin-top: 2px;
+}
+
+.sf-add-group {
+  align-self: flex-end;
+  margin-top: 4px;
+}
+
+.edit-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .live-state.good { color: var(--good); }
@@ -1302,6 +1801,11 @@ select {
 
 .feed-head .chips {
   flex: 1;
+}
+
+.feed-head > .btn,
+.feed-head > .check {
+  margin-left: auto;
 }
 
 .feed-head .check {
@@ -1396,6 +1900,7 @@ select {
 /* An item as the game's tooltip shows it */
 
 .tooltip {
+  position: relative;
   --rarity: #c8c8c8;
   --rarity-dim: rgba(200, 200, 200, 0.35);
   /* Fills the middle, as on the trade site. */
@@ -1458,10 +1963,27 @@ select {
 .tt-unidentified { color: #d20000; }
 .tt-note { color: #aa9e82; }
 
+.tt-line {
+  padding: 0 4px;
+}
+
+.tt-line:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+/* Placed against the tooltip's left edge, on the hovered line. */
 .mod-range {
-  color: #6f6f6f;
+  display: none;
+  position: absolute;
+  left: 10px;
+  color: #8888ff;
   font-size: 12px;
   font-variant: normal;
+  text-align: left;
+}
+
+.tt-line:hover .mod-range {
+  display: inline;
 }
 
 /* Price and seller, beside the item */

@@ -79,6 +79,23 @@ impl SearchStore {
             .ok_or_else(|| "That search is gone.".to_string())
     }
 
+    /// Moves a search to another build, at the end.
+    pub fn move_search(&mut self, id: &str, group_id: &str) -> Result<(), String> {
+        if self.find(id).is_some_and(|(g, _)| g.id == group_id) {
+            return Ok(());
+        }
+        self.group_mut(group_id)?;
+        let mut moved = None;
+        for g in self.groups.iter_mut() {
+            if let Some(i) = g.searches.iter().position(|s| s.id == id) {
+                moved = Some(g.searches.remove(i));
+            }
+        }
+        let search = moved.ok_or("That search is gone.")?;
+        self.group_mut(group_id)?.searches.push(search);
+        Ok(())
+    }
+
     pub fn find(&self, id: &str) -> Option<(&SearchGroup, &SavedSearch)> {
         self.groups
             .iter()

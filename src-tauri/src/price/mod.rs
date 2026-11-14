@@ -234,9 +234,33 @@ impl PriceService {
         self.trade.fetch_raw(&self.http, ids, query_id, Some(session)).await
     }
 
+    /// An ordinary search: the site's id for it, how many match, and the listing ids
+    /// it shows. Signed in when there's a session.
+    pub async fn find_listings(&self, body: &serde_json::Value, league: &str, session: Option<&str>) -> Result<(String, u32, Vec<String>), String> {
+        self.trade.search_ids(&self.http, league, body, session).await
+    }
+
+    /// Listings by id, signed in when there's a session (then they carry the tokens to
+    /// travel or whisper).
+    pub async fn fetch_listings_as(&self, ids: &[String], query_id: &str, session: Option<&str>) -> Result<Vec<serde_json::Value>, String> {
+        self.trade.fetch_raw(&self.http, ids, query_id, session).await
+    }
+
     /// Travel to the seller's hideout, or whisper them, as the site's buttons do.
     pub async fn use_listing_token(&self, token: &str, league: &str, session: &str) -> Result<(), String> {
         self.trade.use_listing_token(&self.http, token, league, session).await
+    }
+
+    /// One of the trade site's data files, as the site sends it: "filters" (the search
+    /// form's filters), "stats" or "items". Cached for a day like the rest.
+    pub async fn trade_data(&self, kind: &str) -> Result<serde_json::Value, String> {
+        let file = match kind {
+            "filters" | "stats" | "items" => format!("{kind}.json"),
+            _ => return Err(format!("No trade data called {kind}.")),
+        };
+        let bytes = self.cached(&file, &format!("/api/trade/data/{kind}"), TRADE_DATA_MAX_AGE).await?;
+        let body: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+        Ok(body["result"].clone())
     }
 
     /// Every currency listings can be priced in, by id ("alch" → Orb of Alchemy).

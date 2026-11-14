@@ -204,6 +204,146 @@ fn searches_update(state: State<AppState>, id: String, name: Option<String>, liv
     Ok(())
 }
 
+/// A saved search as the edit form shows it: the trade site's query itself, which the
+/// form changes the way the site's own search form does.
+#[derive(Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchDetail {
+    name: String,
+    league: String,
+    group_id: String,
+    query: serde_json::Value,
+}
+
+#[tauri::command]
+fn searches_detail(state: State<AppState>, id: String) -> Result<SearchDetail, String> {
+    let store = state.searches.lock().unwrap();
+    let (g, s) = store.find(&id).ok_or("That search is gone.")?;
+    Ok(SearchDetail { name: s.name.clone(), league: s.league.clone(), group_id: g.id.clone(), query: s.body["query"].clone() })
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchEdit {
+    #[serde(flatten)]
+    detail: SearchDetail,
+    /// A trade site link to search for instead, keeping the name and Live.
+    link: Option<String>,
+}
+
+#[tauri::command]
+fn searches_edit(state: State<AppState>, id: String, edit: SearchEdit) -> Result<(), String> {
+    let replacement = match edit.link.as_deref().map(str::trim).filter(|l| !l.is_empty()) {
+        Some(link) => Some(searches::from_link(link, "")?),
+        None => None,
+    };
+    let SearchDetail { name, league, group_id, query } = edit.detail;
+    if !query.is_object() {
+        return Err("That search isn't one the trade site would take.".into());
+    }
+    let mut store = state.searches.lock().unwrap();
+    let search = store.search_mut(&id)?;
+    if !name.trim().is_empty() {
+        search.name = name.trim().to_string();
+    }
+    match replacement {
+        Some(new) => {
+            search.league = new.league;
+            search.body = new.body;
+        }
+        None => {
+            if !league.trim().is_empty() {
+                search.league = league.trim().to_string();
+            }
+            search.body["query"] = query;
+        }
+    }
+    store.move_search(&id, &group_id)?;
+    store.save()?;
+    drop(store);
+    state.sync_live();
+    Ok(())
+}
+
+/// The search and its build, for the listings an ordinary search shows.
+fn saved_search(state: &AppState, id: &str) -> Result<(String, searches::SavedSearch), String> {
+    let store = state.searches.lock().unwrap();
+    let (g, s) = store.find(id).ok_or("That search is gone.")?;
+    Ok((g.name.clone(), s.clone()))
+}
+
+/// An ordinary search, as the trade site's Search button runs it: a saved search
+/// (`id`), or a query from the search form. Signed in when there's a session, so the
+/// listings can be bought from here.
+#[tauri::command]
+async fn trade_search(
+    state: State<'_, AppState>,
+    id: Option<String>,
+    league: Option<String>,
+    query: Option<serde_json::Value>,
+) -> Result<live::SearchPage, String> {
+    let session = session::get();
+    match id {
+        Some(id) => {
+            let (group, search) = saved_search(&state, &id)?;
+            let from = live::HitSource { search_id: &search.id, search_name: &search.name, group: &group, league: &search.league };
+            state.live.search(&from, &search.body, session.as_deref()).await
+        }
+        None => {
+            let league = league.ok_or("Which league?")?;
+            let body = serde_json::json!({ "query": query.ok_or("Nothing to search for.")?, "sort": { "price": "asc" } });
+            let from = live::HitSource { search_id: "", search_name: "", group: "", league: &league };
+            state.live.search(&from, &body, session.as_deref()).await
+        }
+    }
+}
+
+/// More listings of a search `trade_search` ran, by id.
+#[tauri::command]
+async fn trade_search_more(
+    state: State<'_, AppState>,
+    id: Option<String>,
+    league: String,
+    query_id: String,
+    ids: Vec<String>,
+) -> Result<Vec<LiveHit>, String> {
+    let session = session::get();
+    let saved = match id {
+        Some(id) => Some(saved_search(&state, &id)?),
+        None => None,
+    };
+    let from = match &saved {
+        Some((group, s)) => live::HitSource { search_id: &s.id, search_name: &s.name, group, league: &s.league },
+        None => live::HitSource { search_id: "", search_name: "", group: "", league: &league },
+    };
+    state.live.more(&from, &query_id, &ids, session.as_deref()).await
+}
+
+/// Keeps a query from the search form as a saved search in a build.
+#[tauri::command]
+fn searches_add_query(
+    state: State<AppState>,
+    group_id: String,
+    name: String,
+    league: String,
+    query: serde_json::Value,
+) -> Result<searches::SavedSearch, String> {
+    let search = searches::SavedSearch {
+        id: searches::new_id(),
+        name: name.trim().to_string(),
+        league,
+        body: serde_json::json!({ "query": query, "sort": { "price": "asc" } }),
+        live: false,
+    };
+    state.searches.lock().unwrap().add_search(&group_id, search)
+}
+
+/// One of the trade site's data files for the search form: "filters", "stats", "items".
+#[tauri::command]
+async fn trade_data(state: State<'_, AppState>, kind: String) -> Result<serde_json::Value, String> {
+    state.price.trade_data(&kind).await
+}
+
 #[tauri::command]
 fn searches_delete(state: State<AppState>, id: String) -> Result<(), String> {
     let mut store = state.searches.lock().unwrap();
@@ -517,6 +657,8 @@ pub fn run() {
             searches_add_link,
             searches_save_check,
             searches_update,
+            searches_detail,
+            searches_edit,
             searches_delete,
             searches_open,
             session_status,
@@ -525,6 +667,10 @@ pub fn run() {
             session_clear,
             live_state,
             trade_currencies,
+            trade_data,
+            trade_search,
+            trade_search_more,
+            searches_add_query,
             live_act
         ])
         .build(tauri::generate_context!())

@@ -135,7 +135,42 @@ pub struct Live {
     tasks: Mutex<HashMap<String, Task>>,
     status: Mutex<HashMap<String, LiveStatus>>,
     hits: Mutex<VecDeque<LiveHit>>,
+    /// Listings from ordinary searches, by id, so they can be bought like hits.
+    listings: Mutex<HashMap<String, LiveHit>>,
 }
+
+/// Which search a listing came from, for the feed.
+pub struct HitSource<'a> {
+    pub search_id: &'a str,
+    pub search_name: &'a str,
+    pub group: &'a str,
+    pub league: &'a str,
+}
+
+impl<'a> HitSource<'a> {
+    fn saved(group: &'a str, search: &'a SavedSearch) -> Self {
+        HitSource { search_id: &search.id, search_name: &search.name, group, league: &search.league }
+    }
+}
+
+/// A page of an ordinary search's results.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchPage {
+    /// The site's id for the search, to fetch more of it.
+    pub query_id: String,
+    /// How many listings match (the site counts up to 10,000).
+    pub total: u32,
+    /// The ids of the listings it shows (up to 100), in order; `listings` are the
+    /// first of them.
+    pub ids: Vec<String>,
+    pub listings: Vec<LiveHit>,
+}
+
+/// Listings fetched at once when a search runs.
+const FIRST_PAGE: usize = 20;
+/// Search listings kept for buying; older ones are dropped.
+const KEEP_LISTINGS: usize = 1000;
 
 impl Live {
     pub fn new(app: AppHandle, price: Arc<PriceService>) -> Arc<Self> {
@@ -145,6 +180,7 @@ impl Live {
             tasks: Mutex::new(HashMap::new()),
             status: Mutex::new(HashMap::new()),
             hits: Mutex::new(VecDeque::new()),
+            listings: Mutex::new(HashMap::new()),
         })
     }
 
@@ -254,7 +290,7 @@ impl Live {
     }
 
     fn hit(&self, group: &str, search: &SavedSearch, query_id: &str, raw: &Value) {
-        let Some(hit) = read_hit(raw, group, search, query_id) else { return };
+        let Some(hit) = read_hit(raw, &HitSource::saved(group, search), query_id) else { return };
         {
             let mut hits = self.hits.lock().unwrap();
             // Relisted (a new price, say): show it once, at the top.
@@ -313,43 +349,62 @@ impl Live {
     /// Takes in a fresh fetch of these listings. Any the site left out are gone.
     fn update_hits(&self, ids: &[String], results: &[Value]) {
         let mut changed = false;
-        {
-            let mut hits = self.hits.lock().unwrap();
-            for h in hits.iter_mut().filter(|h| ids.contains(&h.id)) {
-                let fresh = results.iter().find(|r| r["id"].as_str() == Some(h.id.as_str()));
-                let gone = fresh.is_none_or(|r| r["gone"].as_bool() == Some(true));
-                if gone {
-                    changed |= !h.gone;
-                    h.gone = true;
-                    continue;
-                }
-                let listing = &fresh.unwrap()["listing"];
-                let s = |v: &Value| v.as_str().filter(|s| !s.is_empty()).map(str::to_string);
-                let amount = listing["price"]["amount"].as_f64();
-                let currency = s(&listing["price"]["currency"]);
-                changed |= amount != h.amount || currency != h.currency;
-                h.amount = amount;
-                h.currency = currency;
-                h.hideout_token = s(&listing["hideout_token"]);
-                h.whisper_token = s(&listing["whisper_token"]);
-                h.fetched = Instant::now();
-            }
+        for h in self.hits.lock().unwrap().iter_mut().filter(|h| ids.contains(&h.id)) {
+            changed |= refresh(h, results);
+        }
+        for (_, l) in self.listings.lock().unwrap().iter_mut().filter(|(id, _)| ids.contains(id)) {
+            refresh(l, results);
         }
         if changed {
             self.emit_hits();
         }
     }
 
+    fn find(&self, id: &str) -> Option<LiveHit> {
+        let hit = self.hits.lock().unwrap().iter().find(|h| h.id == id).cloned();
+        hit.or_else(|| self.listings.lock().unwrap().get(id).cloned())
+    }
+
+    /// Runs an ordinary search, as the site's Search button does: the first listings,
+    /// and the ids of the rest to fetch with `more`. Signed in, listings carry the
+    /// tokens to travel or whisper.
+    pub async fn search(&self, from: &HitSource<'_>, body: &Value, session: Option<&str>) -> Result<SearchPage, String> {
+        let (query_id, total, ids) = self.price.find_listings(body, from.league, session).await?;
+        let first: Vec<String> = ids.iter().take(FIRST_PAGE).cloned().collect();
+        let listings = self.fetch_page(from, &query_id, &first, session).await?;
+        Ok(SearchPage { query_id, total, ids, listings })
+    }
+
+    /// More of a search's listings, by id.
+    pub async fn more(&self, from: &HitSource<'_>, query_id: &str, ids: &[String], session: Option<&str>) -> Result<Vec<LiveHit>, String> {
+        self.fetch_page(from, query_id, ids, session).await
+    }
+
+    async fn fetch_page(&self, from: &HitSource<'_>, query_id: &str, ids: &[String], session: Option<&str>) -> Result<Vec<LiveHit>, String> {
+        let raw = self.price.fetch_listings_as(ids, query_id, session).await?;
+        let listings: Vec<LiveHit> = raw.iter().filter_map(|r| read_hit(r, from, query_id)).collect();
+        let mut kept = self.listings.lock().unwrap();
+        if kept.len() > KEEP_LISTINGS {
+            kept.clear();
+        }
+        for l in &listings {
+            kept.insert(l.id.clone(), l.clone());
+        }
+        Ok(listings)
+    }
+
     /// Travels to the seller's hideout or whispers them, as the site's buttons do,
-    /// with a fresh token when the one in hand is old. Says which it did.
+    /// with a fresh token when the one in hand is old (or was fetched signed out).
+    /// Says which it did.
     pub async fn act(&self, id: &str, session: &str) -> Result<&'static str, String> {
-        let find = || self.hits.lock().unwrap().iter().find(|h| h.id == id).cloned();
-        let mut hit = find().ok_or("That listing isn't in the feed any more.")?;
-        if hit.fetched.elapsed() > TOKEN_FRESH {
+        let gone = || "That listing isn't in the feed any more.".to_string();
+        let mut hit = self.find(id).ok_or_else(gone)?;
+        let no_tokens = hit.hideout_token.is_none() && hit.whisper_token.is_none();
+        if hit.fetched.elapsed() > TOKEN_FRESH || no_tokens {
             let ids = [hit.id.clone()];
             let results = self.price.fetch_listings(&ids, &hit.query_id, session).await?;
             self.update_hits(&ids, &results);
-            hit = find().ok_or("That listing isn't in the feed any more.")?;
+            hit = self.find(id).ok_or_else(gone)?;
         }
         if hit.gone {
             return Err("Item no longer available.".into());
@@ -371,17 +426,41 @@ impl Live {
     }
 }
 
+/// Brings a listing up to date from a fresh fetch (gone if the fetch left it out).
+/// Says whether anything shown changed.
+fn refresh(h: &mut LiveHit, results: &[Value]) -> bool {
+    let fresh = results.iter().find(|r| r["id"].as_str() == Some(h.id.as_str()));
+    let Some(fresh) = fresh.filter(|r| r["gone"].as_bool() != Some(true)) else {
+        let changed = !h.gone;
+        h.gone = true;
+        return changed;
+    };
+    let listing = &fresh["listing"];
+    let s = |v: &Value| v.as_str().filter(|s| !s.is_empty()).map(str::to_string);
+    let amount = listing["price"]["amount"].as_f64();
+    let currency = s(&listing["price"]["currency"]);
+    let changed = amount != h.amount || currency != h.currency;
+    h.amount = amount;
+    h.currency = currency;
+    h.hideout_token = s(&listing["hideout_token"]);
+    h.whisper_token = s(&listing["whisper_token"]);
+    h.whisper = s(&listing["whisper"]).or(h.whisper.take());
+    h.fetched = Instant::now();
+    changed
+}
+
 /// A fetched listing as a feed entry.
-fn read_hit(raw: &Value, group: &str, search: &SavedSearch, query_id: &str) -> Option<LiveHit> {
+fn read_hit(raw: &Value, from: &HitSource, query_id: &str) -> Option<LiveHit> {
     let listing = &raw["listing"];
     let s = |v: &Value| v.as_str().filter(|s| !s.is_empty()).map(str::to_string);
     Some(LiveHit {
         id: s(&raw["id"])?,
-        search_id: search.id.clone(),
-        search_name: search.name.clone(),
-        group: group.to_string(),
-        league: search.league.clone(),
-        seen: now_rfc3339(),
+        search_id: from.search_id.to_string(),
+        search_name: from.search_name.to_string(),
+        group: from.group.to_string(),
+        league: from.league.to_string(),
+        // When it was listed; a live hit was listed just now.
+        seen: s(&listing["indexed"]).unwrap_or_else(now_rfc3339),
         item: read_item(&raw["item"]),
         amount: listing["price"]["amount"].as_f64(),
         currency: s(&listing["price"]["currency"]),
@@ -436,16 +515,7 @@ fn read_item(item: &Value) -> HitItem {
         name: text(&item["name"]),
         type_line: text(&item["typeLine"]),
         icon: item["icon"].as_str().map(str::to_string),
-        rarity: match item["frameType"].as_u64() {
-            Some(1) => "magic",
-            Some(2) => "rare",
-            Some(3) => "unique",
-            Some(4) => "gem",
-            Some(5) => "currency",
-            Some(6) => "card",
-            Some(9) => "relic",
-            _ => "normal",
-        },
+        rarity: rarity(item),
         item_level: item["ilvl"].as_u64(),
         corrupted: item["corrupted"].as_bool() == Some(true),
         sockets: sockets(&item["sockets"]),
@@ -455,6 +525,27 @@ fn read_item(item: &Value) -> HitItem {
         unidentified: item["identified"].as_bool() == Some(false),
         mirrored: item["duplicated"].as_bool() == Some(true),
         note: item["note"].as_str().filter(|s| !s.is_empty()).map(str::to_string),
+    }
+}
+
+/// The item's rarity, as the tooltip colours it. `rarity` says it for items that have
+/// one (a foil unique's frame is its own); the frame says it for gems, currency, cards.
+fn rarity(item: &Value) -> &'static str {
+    match item["rarity"].as_str() {
+        Some("Magic") => return "magic",
+        Some("Rare") => return "rare",
+        Some("Unique") => return "unique",
+        _ => {}
+    }
+    match item["frameType"].as_u64() {
+        Some(1) => "magic",
+        Some(2) => "rare",
+        Some(3) | Some(10) => "unique",
+        Some(4) => "gem",
+        Some(5) => "currency",
+        Some(6) => "card",
+        Some(9) => "relic",
+        _ => "normal",
     }
 }
 
@@ -637,7 +728,7 @@ mod tests {
     #[test]
     fn reads_items() {
         let item = serde_json::json!({
-            "name": "Tabula Rasa", "typeLine": "Simple Robe", "frameType": 3, "ilvl": 84,
+            "name": "Tabula Rasa", "typeLine": "Simple Robe", "frameType": 10, "rarity": "Unique", "ilvl": 84,
             "icon": "https://web.poecdn.com/x.png", "corrupted": true,
             "sockets": [{"group":0,"sColour":"W"},{"group":0,"sColour":"W"},{"group":1,"sColour":"R"}],
             "properties": [{"name":"Body Armours","values":[]},{"name":"Quality","values":[["+20%",1]]},

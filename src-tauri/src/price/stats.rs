@@ -131,7 +131,13 @@ impl StatIndex {
             .flat_map(|g| &g.entries)
             .filter_map(|e| Some((e.text.as_ref()?.to_lowercase(), (e.base.clone(), e.disc.clone()?))))
             .collect();
-        StatIndex { by_text, bases, transfigured, exchange_ids: HashMap::new(), currencies: HashMap::new() }
+        StatIndex {
+            by_text,
+            bases,
+            transfigured,
+            exchange_ids: HashMap::new(),
+            currencies: HashMap::new(),
+        }
     }
 
     pub fn with_exchange(mut self, statics: &StaticResponse) -> Self {

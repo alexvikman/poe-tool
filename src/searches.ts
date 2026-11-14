@@ -95,6 +95,42 @@ export const addLink = (groupId: string, link: string, name: string) =>
   invoke<void>("searches_add_link", { groupId, link, name });
 export const updateSearch = (id: string, patch: { name?: string; live?: boolean }) =>
   invoke<void>("searches_update", { id, name: patch.name ?? null, live: patch.live ?? null });
+/** A saved search as the edit form shows it: the trade site's query itself. */
+export interface SearchDetail {
+  name: string;
+  league: string;
+  groupId: string;
+  // The site's own free-form query JSON.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  query: any;
+}
+
+export const searchDetail = (id: string) => invoke<SearchDetail>("searches_detail", { id });
+export const editSearch = (id: string, edit: SearchDetail & { link: string | null }) =>
+  invoke<void>("searches_edit", { id, edit });
+
+/** A page of an ordinary search: the first listings, and the ids of the rest. */
+export interface SearchPage {
+  queryId: string;
+  /** How many match (the site counts up to 10,000). */
+  total: number;
+  /** The listings the site shows (up to 100), in order. */
+  ids: string[];
+  listings: LiveHit[];
+}
+
+/** Runs a saved search now, as the trade site's Search button does. */
+export const runSavedSearch = (id: string) => invoke<SearchPage>("trade_search", { id, league: null, query: null });
+/** Runs a query from the search form. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const runSearch = (league: string, query: any) => invoke<SearchPage>("trade_search", { id: null, league, query });
+export const searchMore = (id: string | null, league: string, queryId: string, ids: string[]) =>
+  invoke<LiveHit[]>("trade_search_more", { id, league, queryId, ids });
+/** Keeps a query from the search form as a saved search in a build. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const addQuery = (groupId: string, name: string, league: string, query: any) =>
+  invoke<SavedSearch>("searches_add_query", { groupId, name, league, query });
+
 export const deleteSearch = (id: string) => invoke<void>("searches_delete", { id });
 export const searchUrl = (id: string) => invoke<string>("searches_open", { id });
 
