@@ -55,3 +55,9 @@ PoE Tool is built to stay within Path of Exile's Terms of Use: it never changes 
 ## For developers
 
 Building from source, testing without the game and how releases are made: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+
+## License
+
+PoE Tool is open source under the [MIT License](LICENSE).
+
+PoE Tool is a fan-made tool, not affiliated with or endorsed by Grinding Gear Games. Path of Exile and its names, art and content belong to Grinding Gear Games.
