@@ -188,16 +188,71 @@ impl PriceService {
                 .exchange(&self.http, league, &want, &have, divine_chaos, options.instant_buyout)
                 .await;
         }
+        let query = self.item_query(item, base_type, filters, options, league).await?;
+        self.trade.search(&self.http, league, query).await
+    }
+
+    /// The item search for these choices, as the trade site takes it. Bulk items
+    /// (searched on the currency exchange) have none.
+    pub async fn item_query(
+        &self,
+        item: &Item,
+        base_type: &str,
+        filters: &[StatFilter],
+        options: &SearchOptions,
+        league: &str,
+    ) -> Result<serde_json::Value, String> {
+        let stats = self.stat_index().await?;
         let gem = if item.rarity == Rarity::Gem {
             stats.transfigured(&item.type_line)
         } else {
             None
         };
-        let query = match &gem {
+        Ok(match &gem {
             Some((base, disc)) => trade::build_query(item, base, Some(disc), filters, options, league),
             None => trade::build_query(item, base_type, None, filters, options, league),
-        };
-        self.trade.search(&self.http, league, query).await
+        })
+    }
+
+    pub fn is_bulk(&self, item: &Item) -> bool {
+        !matches!(item.rarity, Rarity::Rare | Rarity::Magic | Rarity::Unique | Rarity::Gem | Rarity::Normal)
+    }
+
+    /// The trade site's page for a saved search.
+    pub async fn site_url(&self, body: &serde_json::Value, league: &str) -> Result<String, String> {
+        let (id, _, _) = self.trade.search_ids(&self.http, league, body, None).await?;
+        Ok(trade::site_search_url(league, &id))
+    }
+
+    /// A search id for the live search, created signed in.
+    pub async fn live_search_id(&self, body: &serde_json::Value, league: &str, session: &str) -> Result<String, String> {
+        let (id, _, _) = self.trade.search_ids(&self.http, league, body, Some(session)).await?;
+        Ok(id)
+    }
+
+    pub async fn fetch_listings(&self, ids: &[String], query_id: &str, session: &str) -> Result<Vec<serde_json::Value>, String> {
+        self.trade.fetch_raw(&self.http, ids, query_id, Some(session)).await
+    }
+
+    /// Travel to the seller's hideout, or whisper them, as the site's buttons do.
+    pub async fn use_listing_token(&self, token: &str, league: &str, session: &str) -> Result<(), String> {
+        self.trade.use_listing_token(&self.http, token, league, session).await
+    }
+
+    /// The account a session belongs to; an error when the site doesn't accept it.
+    pub async fn account_name(&self, session: &str) -> Result<String, String> {
+        let resp = self
+            .http
+            .get(format!("{}/character-window/get-account-name", trade::SITE))
+            .header("Cookie", format!("POESESSID={session}"))
+            .send()
+            .await
+            .map_err(|e| format!("Trade site: {e}"))?;
+        let body: serde_json::Value = resp.json().await.map_err(|_| "The site didn't accept this POESESSID.".to_string())?;
+        body["accountName"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| "The site didn't accept this POESESSID.".to_string())
     }
 
     async fn stat_index(&self) -> Result<Arc<StatIndex>, String> {

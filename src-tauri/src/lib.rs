@@ -3,7 +3,10 @@ pub mod audio;
 mod client_log;
 mod game;
 mod hotkey;
+mod live;
 pub mod price;
+mod searches;
+mod session;
 mod settings;
 mod town_mute;
 
@@ -24,6 +27,8 @@ use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, RunEvent, State, WebviewWindow, WindowEvent,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+use live::{Live, LiveHit, LiveStatus};
+use searches::{SearchGroup, SearchStore};
 use town_mute::{Status, TownMute};
 
 const PRICE_WINDOW: &str = "price";
@@ -34,6 +39,16 @@ struct AppState {
     status: Arc<Mutex<Status>>,
     ducker: Arc<Mutex<Ducker>>,
     price: Arc<PriceService>,
+    searches: Arc<Mutex<SearchStore>>,
+    live: Arc<Live>,
+}
+
+impl AppState {
+    /// Watches exactly the searches marked live, with the stored session.
+    fn sync_live(&self) {
+        let watched = self.searches.lock().unwrap().live_searches();
+        self.live.sync(watched, session::get());
+    }
 }
 
 #[tauri::command]
@@ -112,6 +127,149 @@ async fn price_search(
     league: String,
 ) -> Result<TradeResult, String> {
     state.price.search(&item, &base_type, &filters, &options, &league).await
+}
+
+#[tauri::command]
+fn searches_list(state: State<AppState>) -> Vec<SearchGroup> {
+    state.searches.lock().unwrap().groups.clone()
+}
+
+#[tauri::command]
+fn searches_add_group(state: State<AppState>, name: String) -> Result<SearchGroup, String> {
+    state.searches.lock().unwrap().add_group(&name)
+}
+
+#[tauri::command]
+fn searches_rename_group(state: State<AppState>, id: String, name: String) -> Result<(), String> {
+    let mut store = state.searches.lock().unwrap();
+    store.group_mut(&id)?.name = name.trim().to_string();
+    store.save()?;
+    drop(store);
+    state.sync_live();
+    Ok(())
+}
+
+#[tauri::command]
+fn searches_delete_group(state: State<AppState>, id: String) -> Result<(), String> {
+    let mut store = state.searches.lock().unwrap();
+    store.groups.retain(|g| g.id != id);
+    store.save()?;
+    drop(store);
+    state.sync_live();
+    Ok(())
+}
+
+#[tauri::command]
+fn searches_add_link(state: State<AppState>, group_id: String, link: String, name: String) -> Result<(), String> {
+    let search = searches::from_link(&link, &name)?;
+    state.searches.lock().unwrap().add_search(&group_id, search)?;
+    Ok(())
+}
+
+/// Saves the search a price check made, with the stats ticked as they are.
+#[tauri::command]
+async fn searches_save_check(
+    state: State<'_, AppState>,
+    group_id: String,
+    name: String,
+    item: Item,
+    base_type: String,
+    filters: Vec<StatFilter>,
+    options: SearchOptions,
+    league: String,
+) -> Result<(), String> {
+    if state.price.is_bulk(&item) {
+        return Err("Currency and other bulk items can't be saved as searches yet.".into());
+    }
+    let query = state.price.item_query(&item, &base_type, &filters, &options, &league).await?;
+    let search = searches::SavedSearch { id: searches::new_id(), name, league, body: query, live: false };
+    state.searches.lock().unwrap().add_search(&group_id, search)?;
+    Ok(())
+}
+
+#[tauri::command]
+fn searches_update(state: State<AppState>, id: String, name: Option<String>, live: Option<bool>) -> Result<(), String> {
+    let mut store = state.searches.lock().unwrap();
+    let search = store.search_mut(&id)?;
+    if let Some(name) = name {
+        search.name = name.trim().to_string();
+    }
+    if let Some(live) = live {
+        search.live = live;
+    }
+    store.save()?;
+    drop(store);
+    state.sync_live();
+    Ok(())
+}
+
+#[tauri::command]
+fn searches_delete(state: State<AppState>, id: String) -> Result<(), String> {
+    let mut store = state.searches.lock().unwrap();
+    for g in store.groups.iter_mut() {
+        g.searches.retain(|s| s.id != id);
+    }
+    store.save()?;
+    drop(store);
+    state.sync_live();
+    Ok(())
+}
+
+/// The trade site's page for a saved search.
+#[tauri::command]
+async fn searches_open(state: State<'_, AppState>, id: String) -> Result<String, String> {
+    let (body, league) = {
+        let store = state.searches.lock().unwrap();
+        let (_, s) = store.find(&id).ok_or("That search is gone.")?;
+        (s.body.clone(), s.league.clone())
+    };
+    state.price.site_url(&body, &league).await
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionStatus {
+    set: bool,
+    account: Option<String>,
+    error: Option<String>,
+}
+
+#[tauri::command]
+async fn session_status(state: State<'_, AppState>) -> Result<SessionStatus, String> {
+    let Some(s) = session::get() else {
+        return Ok(SessionStatus { set: false, account: None, error: None });
+    };
+    Ok(match state.price.account_name(&s).await {
+        Ok(account) => SessionStatus { set: true, account: Some(account), error: None },
+        Err(e) => SessionStatus { set: true, account: None, error: Some(e) },
+    })
+}
+
+#[tauri::command]
+async fn session_set(state: State<'_, AppState>, value: String) -> Result<SessionStatus, String> {
+    session::set(&value)?;
+    state.sync_live();
+    session_status(state).await
+}
+
+#[tauri::command]
+fn session_clear(state: State<AppState>) -> Result<(), String> {
+    session::clear()?;
+    state.sync_live();
+    Ok(())
+}
+
+#[tauri::command]
+fn live_state(state: State<AppState>) -> (std::collections::HashMap<String, LiveStatus>, Vec<LiveHit>) {
+    (state.live.statuses(), state.live.hits())
+}
+
+/// Travel to the seller's hideout (instant buyout) or whisper them, as the trade site's
+/// buttons do.
+#[tauri::command]
+async fn live_use_token(state: State<'_, AppState>, token: String, league: String) -> Result<(), String> {
+    let s = session::get().ok_or("Add your POESESSID first.")?;
+    state.price.use_listing_token(&token, &league, &s).await
 }
 
 #[derive(Clone, Serialize)]
@@ -234,6 +392,7 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             let cache_dir = app.path().app_cache_dir()?;
@@ -244,13 +403,18 @@ pub fn run() {
             let price = Arc::new(PriceService::new(cache_dir));
             // First, before anything slow: the windows already exist and their pages
             // call the commands as soon as they load.
+            let searches = Arc::new(Mutex::new(SearchStore::load(config_dir.join("searches.json"))));
+            let live = Live::new(app.handle().clone(), price.clone());
             app.manage(AppState {
                 settings: settings.clone(),
                 settings_path,
                 status: status.clone(),
                 ducker: ducker.clone(),
                 price: price.clone(),
+                searches,
+                live,
             });
+            app.state::<AppState>().sync_live();
 
             let monitor = TownMute::new(settings.clone(), ducker.clone());
             let handle = app.handle().clone();
@@ -324,7 +488,21 @@ pub fn run() {
             get_leagues,
             price_check,
             price_search,
-            gem_search
+            gem_search,
+            searches_list,
+            searches_add_group,
+            searches_rename_group,
+            searches_delete_group,
+            searches_add_link,
+            searches_save_check,
+            searches_update,
+            searches_delete,
+            searches_open,
+            session_status,
+            session_set,
+            session_clear,
+            live_state,
+            live_use_token
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

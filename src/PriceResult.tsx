@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { addGroup, listGroups, saveCheckSearch, type SearchGroup } from "./searches";
 import {
   formatChaos,
   formatListingPrice,
@@ -33,6 +34,7 @@ export function PriceResult({ check }: { check: PriceCheck }) {
   const [tradeError, setTradeError] = useState<string | null>(check.tradeError);
   const [searching, setSearching] = useState(false);
   const [showHidden, setShowHidden] = useState(false);
+  const [saving, setSaving] = useState(false);
   const timer = useRef<number | undefined>(undefined);
   const searchId = useRef(0);
 
@@ -236,10 +238,33 @@ export function PriceResult({ check }: { check: PriceCheck }) {
                 ? `Matched: ${trade.total}`
                 : "Trade"}
           </div>
-          <button className="btn" onClick={openTrade} title="Open this search on pathofexile.com">
-            Trade ↗
-          </button>
+          <div className="trade-actions">
+            {!bulk && (
+              <button className="btn" onClick={() => setSaving(!saving)} title="Keep this search under a build">
+                Save search
+              </button>
+            )}
+            <button className="btn" onClick={openTrade} title="Open this search on pathofexile.com">
+              Trade ↗
+            </button>
+          </div>
         </div>
+        {saving && (
+          <SaveSearch
+            defaultName={title ?? check.baseType}
+            onSave={async (groupId, name) => {
+              await saveCheckSearch({
+                groupId,
+                name,
+                item: check.item,
+                baseType: check.baseType,
+                filters,
+                options,
+                league: check.league,
+              });
+            }}
+          />
+        )}
         {tradeError && <p className="bad small">{tradeError}</p>}
         {trade && trade.listings.length === 0 && !searching && (
           <p className="muted small">Nothing listed. Try turning some stats off.</p>
@@ -354,6 +379,61 @@ function RollBar({
         <div className="roll-tick" style={{ left: pct(value) }} title={`This item: ${value}`} />
       </div>
       <span className="roll-end">{hi}</span>
+    </div>
+  );
+}
+
+/** Saves the search as it is now under a build, new or existing. */
+function SaveSearch({
+  defaultName,
+  onSave,
+}: {
+  defaultName: string;
+  onSave: (groupId: string, name: string) => Promise<void>;
+}) {
+  const [groups, setGroups] = useState<SearchGroup[]>([]);
+  const [groupId, setGroupId] = useState("");
+  const [newGroup, setNewGroup] = useState("");
+  const [name, setName] = useState(defaultName);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    listGroups().then((g) => {
+      setGroups(g);
+      setGroupId(g[0]?.id ?? "new");
+    });
+  }, []);
+
+  async function save() {
+    try {
+      const id = groupId === "new" ? (await addGroup(newGroup)).id : groupId;
+      await onSave(id, name);
+      setSaved(true);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  if (saved) return <p className="muted small">Saved under Searches.</p>;
+  return (
+    <div className="save-search">
+      <select value={groupId} onChange={(e) => setGroupId(e.target.value)}>
+        {groups.map((g) => (
+          <option key={g.id} value={g.id}>
+            {g.name}
+          </option>
+        ))}
+        <option value="new">New build…</option>
+      </select>
+      {groupId === "new" && (
+        <input type="text" placeholder="Build name" value={newGroup} onChange={(e) => setNewGroup(e.target.value)} />
+      )}
+      <input type="text" placeholder="Search name" value={name} onChange={(e) => setName(e.target.value)} />
+      <button className="btn primary" onClick={save} disabled={groupId === "new" && !newGroup.trim()}>
+        Save
+      </button>
+      {error && <p className="bad small">{error}</p>}
     </div>
   );
 }

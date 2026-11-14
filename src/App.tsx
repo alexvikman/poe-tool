@@ -3,6 +3,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { PricePage } from "./PricePage";
 import { TownMutePage } from "./TownMutePage";
 import { HotkeysPage } from "./HotkeysPage";
+import { SearchesPage } from "./SearchesPage";
 import { UpdateNotice } from "./UpdateNotice";
 import { UpdatesPage } from "./UpdatesPage";
 import { startUpdateChecks, useUpdates } from "./updates";
@@ -10,6 +11,7 @@ import "./App.css";
 
 const NAV = [
   { id: "price", label: "Price check", soon: false },
+  { id: "searches", label: "Searches", soon: false },
   { id: "builds", label: "Builds", soon: true },
   { id: "town-mute", label: "Town mute", soon: false },
   { id: "hotkeys", label: "Hotkeys", soon: false },
@@ -51,6 +53,7 @@ function App() {
       </nav>
       <main className="main">
         {page === "price" && <PricePage />}
+        {page === "searches" && <SearchesPage />}
         {page === "town-mute" && <TownMutePage />}
         {page === "hotkeys" && <HotkeysPage />}
         {page === "updates" && <UpdatesPage />}

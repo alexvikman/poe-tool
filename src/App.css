@@ -1015,3 +1015,133 @@ select {
   gap: 8px;
   flex-wrap: wrap;
 }
+
+/* Searches */
+
+.inline-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.inline-form input[type="text"],
+.inline-form input[type="password"] {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 7px 9px;
+  font: inherit;
+}
+
+.inline-form input.short {
+  flex: 0 0 150px;
+}
+
+.group {
+  gap: 6px;
+}
+
+.group-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.group-title,
+.search-name {
+  all: unset;
+  color: var(--text);
+  border-bottom: 1px solid transparent;
+}
+
+.group-title {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 18px;
+  color: var(--accent);
+  flex: 1;
+}
+
+.group-title:focus,
+.search-name:focus {
+  border-bottom-color: var(--accent-dim);
+}
+
+.search-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 0;
+  border-top: 1px solid var(--line);
+}
+
+.search-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.live-state.good { color: var(--good); }
+.live-state.bad { color: var(--bad); }
+
+.small-switch {
+  width: 36px;
+  height: 20px;
+  margin-top: 0;
+}
+
+.small-switch span::after {
+  width: 12px;
+  height: 12px;
+}
+
+.small-switch input:checked + span::after {
+  transform: translateX(16px);
+}
+
+.hit {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+}
+
+.hit-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.hit-item {
+  color: var(--text);
+}
+
+.hit-price {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.save-search {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.save-search input,
+.save-search select {
+  flex: 1;
+  min-width: 120px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font: inherit;
+}

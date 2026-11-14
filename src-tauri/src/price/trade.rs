@@ -237,6 +237,80 @@ impl TradeClient {
         })
     }
 
+    /// Runs a search as the trade site's own page does, signed in when `session` (a
+    /// POESESSID) is given. Returns the search id, the total and the result ids.
+    pub async fn search_ids(
+        &self,
+        http: &reqwest::Client,
+        league: &str,
+        body: &Value,
+        session: Option<&str>,
+    ) -> Result<(String, u32, Vec<String>), String> {
+        if let Some(wait) = self.search_limit.lock().unwrap().acquire() {
+            return Err(rate_limited(wait));
+        }
+        let url = format!("{SITE}/api/trade/search/{}", urlencode(league));
+        let resp = signed_in(http.post(url), session).json(body).send().await.map_err(net_error)?;
+        self.search_limit.lock().unwrap().update(resp.headers());
+        let resp = check_status(resp).await?;
+        let found: SearchResponse = resp.json().await.map_err(net_error)?;
+        Ok((found.id, found.total, found.result))
+    }
+
+    /// Listings by id, as the site sends them (signed in, they carry the tokens for
+    /// whispering and travelling to the seller's hideout).
+    pub async fn fetch_raw(
+        &self,
+        http: &reqwest::Client,
+        ids: &[String],
+        query_id: &str,
+        session: Option<&str>,
+    ) -> Result<Vec<Value>, String> {
+        let mut out = Vec::new();
+        for batch in ids.chunks(FETCH_BATCH) {
+            if let Some(wait) = self.fetch_limit.lock().unwrap().acquire() {
+                return Err(rate_limited(wait));
+            }
+            let url = format!("{SITE}/api/trade/fetch/{}", batch.join(","));
+            let resp = signed_in(http.get(url), session)
+                .query(&[("query", query_id)])
+                .send()
+                .await
+                .map_err(net_error)?;
+            self.fetch_limit.lock().unwrap().update(resp.headers());
+            let resp = check_status(resp).await?;
+            let body: Value = resp.json().await.map_err(net_error)?;
+            if let Some(results) = body["result"].as_array() {
+                out.extend(results.iter().filter(|r| !r.is_null()).cloned());
+            }
+        }
+        Ok(out)
+    }
+
+    /// What the site's "Travel to Hideout" and "Whisper" buttons do: hands the token
+    /// to the game server, which acts in the game for the signed-in account.
+    pub async fn use_listing_token(
+        &self,
+        http: &reqwest::Client,
+        token: &str,
+        league: &str,
+        session: &str,
+    ) -> Result<(), String> {
+        let resp = signed_in(http.post(format!("{SITE}/api/trade/whisper")), Some(session))
+            .header("Referer", format!("{SITE}/trade/search/{}", urlencode(league)))
+            .header("X-Requested-With", "XMLHttpRequest")
+            .json(&json!({ "token": token }))
+            .send()
+            .await
+            .map_err(net_error)?;
+        let resp = check_status(resp).await?;
+        let body: Value = resp.json().await.unwrap_or(Value::Null);
+        if body["error"].is_object() {
+            return Err(body["error"]["message"].as_str().unwrap_or("The trade site said no.").to_string());
+        }
+        Ok(())
+    }
+
     pub async fn search(
         &self,
         http: &reqwest::Client,
@@ -301,6 +375,22 @@ fn rate_limited(wait: Duration) -> String {
     )
 }
 
+/// Adds the site's session cookie and origin, as its own pages send them.
+fn signed_in(req: reqwest::RequestBuilder, session: Option<&str>) -> reqwest::RequestBuilder {
+    match session {
+        Some(s) => req.header("Cookie", format!("POESESSID={s}")).header("Origin", SITE),
+        None => req,
+    }
+}
+
+pub fn site_search_url(league: &str, id: &str) -> String {
+    format!("{SITE}/trade/search/{}/{}", urlencode(league), id)
+}
+
+pub fn urlencode_league(league: &str) -> String {
+    urlencode(league)
+}
+
 fn net_error(e: reqwest::Error) -> String {
     format!("Trade site: {e}")
 }
@@ -312,6 +402,9 @@ async fn check_status(resp: reqwest::Response) -> Result<reqwest::Response, Stri
     }
     if status.as_u16() == 429 {
         return Err("The trade site says too many requests. Wait a minute.".into());
+    }
+    if status.as_u16() == 401 || status.as_u16() == 403 {
+        return Err("The trade site didn't accept the session. Check your POESESSID under Searches.".into());
     }
     let body: Value = resp.json().await.unwrap_or(Value::Null);
     let message = body["error"]["message"].as_str().unwrap_or("unknown error");
