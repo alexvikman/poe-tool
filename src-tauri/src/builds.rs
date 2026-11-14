@@ -26,6 +26,12 @@ pub struct StoredBuild {
 
 /* Import */
 
+/// The longest PoB code taken in, pasted or fetched from a link (a big build's code is
+/// well under 1 MB).
+const MAX_CODE_BYTES: usize = 4 * 1024 * 1024;
+/// The most XML a code may unpack to, so a crafted one can't fill the memory.
+const MAX_XML_BYTES: u64 = 16 * 1024 * 1024;
+
 /// The PoB code behind what the user pasted: a pobb.in, pastebin or poe.ninja link, or
 /// the code itself. Says where it came from, for links.
 pub async fn fetch_code(http: &reqwest::Client, input: &str) -> Result<(String, Option<String>), String> {
@@ -35,13 +41,21 @@ pub async fn fetch_code(http: &reqwest::Client, input: &str) -> Result<(String, 
         decode(&code)?; // Says so now if it isn't one.
         return Ok((code, None));
     };
-    let resp = http
+    let mut resp = http
         .get(&raw_url)
         .send()
         .await
         .and_then(|r| r.error_for_status())
         .map_err(|e| format!("Couldn't get the build: {e}"))?;
-    let code: String = resp.text().await.map_err(|e| e.to_string())?.split_whitespace().collect();
+    // Read it in pieces, so an endless answer stops at the limit.
+    let mut body = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(|e| format!("Couldn't get the build: {e}"))? {
+        body.extend_from_slice(&chunk);
+        if body.len() > MAX_CODE_BYTES {
+            return Err("That link holds far more than a build.".into());
+        }
+    }
+    let code: String = String::from_utf8_lossy(&body).split_whitespace().collect();
     decode(&code).map_err(|_| "That link doesn't hold a Path of Building build.".to_string())?;
     Ok((code, Some(input.to_string())))
 }
@@ -69,12 +83,20 @@ fn raw_url(input: &str) -> Option<String> {
 /// A PoB code's XML: base64 (either alphabet) of zlib-compressed XML.
 pub fn decode(code: &str) -> Result<String, String> {
     let not_a_build = || "That isn't a Path of Building code or a link to one.".to_string();
+    if code.len() > MAX_CODE_BYTES {
+        return Err("That's far longer than a Path of Building code.".into());
+    }
     let clean = code.trim().trim_end_matches('=').replace('+', "-").replace('/', "_");
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(clean).map_err(|_| not_a_build())?;
+    // Unpacked with a ceiling: a small code can be made to unpack to gigabytes.
     let mut xml = String::new();
     flate2::read::ZlibDecoder::new(&bytes[..])
+        .take(MAX_XML_BYTES + 1)
         .read_to_string(&mut xml)
         .map_err(|_| not_a_build())?;
+    if xml.len() as u64 > MAX_XML_BYTES {
+        return Err("That code unpacks to far more than a build.".into());
+    }
     if !xml.contains("<PathOfBuilding") {
         return Err(not_a_build());
     }
@@ -1090,6 +1112,19 @@ mod tests {
             );
         }
         println!("exported: Life {:?} FullDPS {:?}", view.stats.get("Life"), view.stats.get("FullDPS"));
+    }
+
+    #[test]
+    fn stops_unpacking_at_the_limit() {
+        use std::io::Write;
+        // 20 MB of the same byte packs to a few kilobytes.
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+        z.write_all(b"<PathOfBuilding>").unwrap();
+        z.write_all(&vec![b' '; 20 * 1024 * 1024]).unwrap();
+        let code = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(z.finish().unwrap());
+        assert!(code.len() < 100_000);
+        assert!(decode(&code).unwrap_err().contains("far more"));
+        assert!(decode(&"A".repeat(MAX_CODE_BYTES + 1)).unwrap_err().contains("far longer"));
     }
 
     #[test]
