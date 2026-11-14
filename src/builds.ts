@@ -18,7 +18,8 @@ export interface BuildView {
   itemSets: { id: string | null; title: string | null; gear: GearItem[] }[];
   skillSets: { id: string | null; title: string | null; groups: GemGroup[] }[];
   trees: TreeView[];
-  configs: { id: string | null; title: string | null; config: string[] }[];
+  /** Configurations, each with its own bandit and pantheon. */
+  configs: { id: string | null; title: string | null; config: string[]; bandit: string | null; pantheon: string[] }[];
   /** Sets that go together, by name as in PoB ("Lvl 96"). */
   loadouts: Loadout[];
   /** What PoB had chosen when the build was exported. */
@@ -84,16 +85,70 @@ export interface TreeView {
   notables: string[];
   ascendancyNotables: string[];
   masteries: string[];
+  /** The tree's node ids that are allocated. */
+  allocated: number[];
+  /** Socket node id → its jewel's place in `jewels`. */
+  sockets: Record<string, number>;
+  /** Mastery node id → its chosen effect. */
+  masteryPicks: Record<string, string>;
 }
 
-/** Imports a pobb.in, pastebin or poe.ninja link, or a PoB code: into a build, or as a
- *  new build named after it. Resolves to the build's id. */
-export const importBuild = (input: string, groupId: string | null) =>
-  invoke<string>("builds_import", { input, groupId });
-export const buildView = (groupId: string) => invoke<BuildView>("builds_view", { groupId });
-/** Stats from the PoB service for a build with these sets chosen. */
-export const calcLoadout = (groupId: string, pick: Loadout) =>
-  invoke<{ stats: Record<string, number>; pobVersion: string | null }>("builds_calc", { groupId, pick });
+/** A build in the Builds list. */
+export interface SavedBuild {
+  id: string;
+  name: string;
+  source: string | null;
+  /** The group of searches it uses, if any. */
+  searches: string | null;
+}
 
-/** Takes the PoB build off a build, keeping its searches. */
-export const removeBuild = (groupId: string) => invoke<void>("builds_remove", { groupId });
+export const listBuilds = () => invoke<SavedBuild[]>("builds_list");
+/** Imports a pobb.in, pastebin or poe.ninja link, or a PoB code, as a new build named
+ *  after it. Resolves to its id. */
+export const importBuild = (input: string) => invoke<string>("builds_import", { input });
+export const buildView = (id: string) => invoke<BuildView>("builds_view", { id });
+/** Stats from Path of Building for a build with these sets chosen. */
+export const calcLoadout = (id: string, pick: Loadout) =>
+  invoke<{ stats: Record<string, number>; pobVersion: string | null }>("builds_calc", { id, pick });
+/** Renames a build, or sets the group of searches it uses (null for none). */
+export const updateBuild = (id: string, change: { name?: string; searches?: string | null }) =>
+  invoke<void>("builds_update", {
+    id,
+    name: change.name ?? null,
+    setSearches: "searches" in change,
+    searches: change.searches ?? null,
+  });
+/** Removes a build; its group of searches stays. */
+export const removeBuild = (id: string) => invoke<void>("builds_remove", { id });
+
+/** The passive tree as it's drawn: the same for every build, fetched once. */
+export interface TreeLayout {
+  nodes: TreeNode[];
+  edges: { a: number; b: number; arc: [number, number, number] | null }[];
+  sprites: Record<string, { url: string; coords: Record<string, [number, number, number, number]> }>;
+  zoom: number;
+}
+
+export interface TreeNode {
+  id: number;
+  x: number;
+  y: number;
+  kind: "normal" | "notable" | "keystone" | "mastery" | "jewel" | "classStart" | "ascendancyStart";
+  name: string;
+  stats: string[];
+  icon: string;
+  inactiveIcon: string | null;
+  activeIcon: string | null;
+  options: string[];
+  ascendancy: string | null;
+  class: string | null;
+}
+
+let layout: Promise<TreeLayout> | null = null;
+export function treeLayout(): Promise<TreeLayout> {
+  layout ??= invoke<TreeLayout>("builds_tree").catch((e) => {
+    layout = null;
+    throw e;
+  });
+  return layout;
+}

@@ -1,4 +1,5 @@
-//! Saved trade searches, grouped (a group is usually a build: "Shockwave Cyclone").
+//! Saved trade searches, in groups ("Shockwave Cyclone", "Uniques to flip"). A build
+//! from Path of Building may use a group for its searches; the two are apart.
 //!
 //! A search keeps the trade site's own query, so it can be run, opened on the site or
 //! watched live. Links from the trade site import directly: the id in a search link
@@ -19,8 +20,9 @@ pub struct SearchGroup {
     pub name: String,
     #[serde(default)]
     pub searches: Vec<SavedSearch>,
-    /// The build from Path of Building, once imported.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// A Path of Building build kept on the group before builds had their own list;
+    /// read once, to move it there.
+    #[serde(default, skip_serializing)]
     pub build: Option<crate::builds::StoredBuild>,
 }
 
@@ -62,7 +64,7 @@ impl SearchStore {
     pub fn add_group(&mut self, name: &str) -> Result<SearchGroup, String> {
         let name = name.trim();
         if name.is_empty() {
-            return Err("Give the build a name.".into());
+            return Err("Give the group a name.".into());
         }
         let group = SearchGroup { id: new_id(), name: name.to_string(), searches: Vec::new(), build: None };
         self.groups.push(group.clone());
@@ -71,7 +73,7 @@ impl SearchStore {
     }
 
     pub fn group_mut(&mut self, id: &str) -> Result<&mut SearchGroup, String> {
-        self.groups.iter_mut().find(|g| g.id == id).ok_or_else(|| "That build is gone.".to_string())
+        self.groups.iter_mut().find(|g| g.id == id).ok_or_else(|| "That group is gone.".to_string())
     }
 
     pub fn search_mut(&mut self, id: &str) -> Result<&mut SavedSearch, String> {

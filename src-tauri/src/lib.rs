@@ -43,6 +43,7 @@ struct AppState {
     ducker: Arc<Mutex<Ducker>>,
     price: Arc<PriceService>,
     searches: Arc<Mutex<SearchStore>>,
+    builds: Mutex<builds::BuildStore>,
     live: Arc<Live>,
     build_assets: Arc<builds::BuildAssets>,
 }
@@ -178,6 +179,15 @@ fn searches_delete_group(state: State<AppState>, id: String) -> Result<(), Strin
     store.groups.retain(|g| g.id != id);
     store.save()?;
     drop(store);
+    // Builds that used the group have none now.
+    let mut builds = state.builds.lock().unwrap();
+    if builds.builds.iter().any(|b| b.searches.as_deref() == Some(id.as_str())) {
+        for b in builds.builds.iter_mut().filter(|b| b.searches.as_deref() == Some(id.as_str())) {
+            b.searches = None;
+        }
+        builds.save()?;
+    }
+    drop(builds);
     state.sync_live();
     Ok(())
 }
@@ -365,81 +375,81 @@ fn searches_add_query(
     state.searches.lock().unwrap().add_search(&group_id, search)
 }
 
-/// Imports a Path of Building build (a pobb.in, pastebin or poe.ninja link, or a PoB
-/// code) into a build, or as a new build named after it. Says which build.
+/// The Builds list: each build's id, name, source and group of searches.
 #[tauri::command]
-async fn builds_import(state: State<'_, AppState>, group_id: Option<String>, input: String) -> Result<String, String> {
+fn builds_list(state: State<AppState>) -> Vec<builds::SavedBuild> {
+    state.builds.lock().unwrap().builds.iter().map(|b| builds::SavedBuild { code: String::new(), ..b.clone() }).collect()
+}
+
+/// Imports a Path of Building build (a pobb.in, pastebin or poe.ninja link, or a PoB
+/// code) as a new build named after it. Says its id.
+#[tauri::command]
+async fn builds_import(state: State<'_, AppState>, input: String) -> Result<String, String> {
     let (code, source) = builds::fetch_code(state.price.http(), &input).await?;
     let view = builds::parse(&builds::decode(&code)?)?;
-    let stored = builds::StoredBuild { code, source };
-    let mut store = state.searches.lock().unwrap();
-    let id = match group_id {
-        Some(id) => {
-            store.group_mut(&id)?.build = Some(stored);
-            id
-        }
-        None => {
-            let group = store.add_group(&builds::title(&view))?;
-            store.group_mut(&group.id)?.build = Some(stored);
-            group.id
-        }
-    };
+    let build = builds::SavedBuild { id: searches::new_id(), name: builds::title(&view), code, source, searches: None };
+    let id = build.id.clone();
+    let mut store = state.builds.lock().unwrap();
+    store.builds.push(build);
     store.save()?;
     Ok(id)
 }
 
 /// A build as the Builds page shows it.
 #[tauri::command]
-async fn builds_view(state: State<'_, AppState>, group_id: String) -> Result<builds::BuildView, String> {
-    let stored = {
-        let store = state.searches.lock().unwrap();
-        let group = store.groups.iter().find(|g| g.id == group_id).ok_or("That build is gone.")?;
-        group.build.clone().ok_or("No Path of Building build here yet.")?
-    };
-    let mut view = builds::parse(&builds::decode(&stored.code)?)?;
-    view.code = stored.code;
-    view.source = stored.source;
+async fn builds_view(state: State<'_, AppState>, id: String) -> Result<builds::BuildView, String> {
+    let saved = state.builds.lock().unwrap().get(&id)?.clone();
+    let mut view = builds::parse(&builds::decode(&saved.code)?)?;
+    view.code = saved.code;
+    view.source = saved.source;
     state.build_assets.dress(&state.price, &mut view).await;
     Ok(view)
 }
 
-/// Stats for a build with these sets chosen, from the PoB service.
+/// The passive tree as it's drawn, the same for every build.
 #[tauri::command]
-async fn builds_calc(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    group_id: String,
-    pick: builds::Loadout,
-) -> Result<builds::Calculated, String> {
-    // PoE Tool's own service unless a setting points elsewhere.
-    let service = state.settings.lock().unwrap().pob_service.clone();
-    let url = Some(service.url.trim())
-        .filter(|u| !u.is_empty())
-        .or(builds::SERVICE_URL.filter(|u| !u.trim().is_empty()))
-        .ok_or("This build of PoE Tool has no Path of Building service. Set one under the builds list.")?
-        .to_string();
-    let key = Some(service.api_key.trim())
-        .filter(|k| !k.is_empty())
-        .or(builds::SERVICE_KEY)
-        .unwrap_or_default()
-        .to_string();
+async fn builds_tree(state: State<'_, AppState>) -> Result<builds::TreeLayout, String> {
+    Ok(state.build_assets.layout(&state.price).await)
+}
+
+/// Stats for a build with these sets chosen, from PoE Tool's Path of Building service.
+#[tauri::command]
+async fn builds_calc(app: AppHandle, state: State<'_, AppState>, id: String, pick: builds::Loadout) -> Result<builds::Calculated, String> {
+    let url = builds::SERVICE_URL
+        .filter(|u| !u.trim().is_empty())
+        .ok_or("This copy of PoE Tool can't calculate other loadouts: it was built without Path of Building's service.")?;
+    let key = builds::SERVICE_KEY.unwrap_or_default();
     let agent = format!("PoE-Tool/{}", app.package_info().version);
-    let code = {
-        let store = state.searches.lock().unwrap();
-        let group = store.groups.iter().find(|g| g.id == group_id).ok_or("That build is gone.")?;
-        group.build.as_ref().ok_or("No Path of Building build here yet.")?.code.clone()
-    };
+    let code = state.builds.lock().unwrap().get(&id)?.code.clone();
     let xml = builds::decode(&code)?;
     let view = builds::parse(&xml)?;
     let xml = builds::with_sets(&xml, &view, &pick);
-    builds::calculate(state.price.http(), &url, &key, &agent, &xml).await
+    builds::calculate(state.price.http(), url, key, &agent, &xml).await
 }
 
-/// Takes the PoB build off a build, keeping its searches.
+/// Renames a build, or with `set_searches` points it at a group of searches (none
+/// for none).
 #[tauri::command]
-fn builds_remove(state: State<AppState>, group_id: String) -> Result<(), String> {
-    let mut store = state.searches.lock().unwrap();
-    store.group_mut(&group_id)?.build = None;
+fn builds_update(state: State<AppState>, id: String, name: Option<String>, set_searches: bool, searches: Option<String>) -> Result<(), String> {
+    let mut store = state.builds.lock().unwrap();
+    let build = store.get_mut(&id)?;
+    if let Some(name) = name.map(|n| n.trim().to_string()) {
+        if name.is_empty() {
+            return Err("Give the build a name.".into());
+        }
+        build.name = name;
+    }
+    if set_searches {
+        build.searches = searches;
+    }
+    store.save()
+}
+
+/// Removes a build; its group of searches stays.
+#[tauri::command]
+fn builds_remove(state: State<AppState>, id: String) -> Result<(), String> {
+    let mut store = state.builds.lock().unwrap();
+    store.builds.retain(|b| b.id != id);
     store.save()
 }
 
@@ -687,7 +697,15 @@ pub fn run() {
             let price = Arc::new(PriceService::new(cache_dir));
             // First, before anything slow: the windows already exist and their pages
             // call the commands as soon as they load.
-            let searches = Arc::new(Mutex::new(SearchStore::load(config_dir.join("searches.json"))));
+            let mut search_store = SearchStore::load(config_dir.join("searches.json"));
+            let mut build_store = builds::BuildStore::load(config_dir.join("builds.json"));
+            // Builds used to live on groups of searches; they have their own list now.
+            if build_store.take_from_groups(&mut search_store.groups)
+                && let Err(e) = build_store.save().and_then(|_| search_store.save())
+            {
+                eprintln!("Couldn't move builds to their own list: {e}");
+            }
+            let searches = Arc::new(Mutex::new(search_store));
             let live = Live::new(app.handle().clone(), price.clone());
             live.start_rechecks();
             app.manage(AppState {
@@ -697,6 +715,7 @@ pub fn run() {
                 ducker: ducker.clone(),
                 price: price.clone(),
                 searches,
+                builds: Mutex::new(build_store),
                 live,
                 build_assets: Arc::new(builds::BuildAssets::default()),
             });
@@ -797,8 +816,11 @@ pub fn run() {
             live_state,
             trade_currencies,
             trade_data,
+            builds_list,
             builds_import,
             builds_view,
+            builds_tree,
+            builds_update,
             builds_remove,
             builds_calc,
             trade_search,

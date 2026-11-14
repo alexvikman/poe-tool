@@ -24,6 +24,76 @@ pub struct StoredBuild {
     pub source: Option<String>,
 }
 
+/// A build in the Builds list.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedBuild {
+    pub id: String,
+    pub name: String,
+    /// The PoB code, as PoB exports it.
+    pub code: String,
+    /// Where it came from: a pobb.in, pastebin or poe.ninja link.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// The group of searches it uses, if any.
+    #[serde(default)]
+    pub searches: Option<String>,
+}
+
+/// The Builds list, saved as builds.json.
+pub struct BuildStore {
+    path: std::path::PathBuf,
+    pub builds: Vec<SavedBuild>,
+}
+
+impl BuildStore {
+    pub fn load(path: std::path::PathBuf) -> Self {
+        let builds = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        BuildStore { path, builds }
+    }
+
+    pub fn save(&self) -> Result<(), String> {
+        if let Some(dir) = self.path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        let json = serde_json::to_vec_pretty(&self.builds).map_err(|e| e.to_string())?;
+        std::fs::write(&self.path, json).map_err(|e| e.to_string())
+    }
+
+    pub fn get(&self, id: &str) -> Result<&SavedBuild, String> {
+        self.builds.iter().find(|b| b.id == id).ok_or_else(|| "That build is gone.".to_string())
+    }
+
+    pub fn get_mut(&mut self, id: &str) -> Result<&mut SavedBuild, String> {
+        self.builds.iter_mut().find(|b| b.id == id).ok_or_else(|| "That build is gone.".to_string())
+    }
+
+    /// Builds that used to live on a group of searches move to the list, using that
+    /// group; a group that only held the build, with no searches, goes. Says whether
+    /// anything moved.
+    pub fn take_from_groups(&mut self, groups: &mut Vec<crate::searches::SearchGroup>) -> bool {
+        let mut moved = false;
+        let mut gone = HashSet::new();
+        for g in groups.iter_mut() {
+            let Some(stored) = g.build.take() else { continue };
+            moved = true;
+            if g.searches.is_empty() {
+                gone.insert(g.id.clone());
+            }
+            self.builds.push(SavedBuild {
+                id: crate::searches::new_id(),
+                name: g.name.clone(),
+                code: stored.code,
+                source: stored.source,
+                searches: (!g.searches.is_empty()).then(|| g.id.clone()),
+            });
+        }
+        groups.retain(|g| !gone.contains(&g.id));
+        moved
+    }
+}
+
+
 /* Import */
 
 /// The longest PoB code taken in, pasted or fetched from a link (a big build's code is
@@ -160,6 +230,9 @@ pub struct ConfigView {
     pub title: Option<String>,
     /// "Boss", "30% Shock", "Custom Mods".
     pub config: Vec<String>,
+    /// The set's bandit and pantheon, which PoB keeps per configuration.
+    pub bandit: Option<String>,
+    pub pantheon: Vec<String>,
 }
 
 /// One of each kind of set, by its place in the lists above.
@@ -247,8 +320,13 @@ pub struct TreeView {
     pub ascendancy_notables: Vec<String>,
     /// Chosen mastery effects: "Attributes Mastery: 5% increased Attributes".
     pub masteries: Vec<String>,
-    #[serde(skip)]
+    /// The passive tree's node ids that are allocated.
+    #[serde(rename = "allocated")]
     nodes: Vec<u32>,
+    /// Socket node id → the jewel in it, by its place in `jewels`.
+    pub sockets: BTreeMap<u32, usize>,
+    /// Mastery node id → its chosen effect.
+    pub mastery_picks: BTreeMap<u32, String>,
     #[serde(skip)]
     mastery_effects: Vec<(u32, u32)>,
 }
@@ -266,13 +344,8 @@ pub fn parse(xml: &str) -> Result<BuildView, String> {
         view.ascendancy = build.attribute("ascendClassName").filter(|a| !a.is_empty() && *a != "None").map(str::to_string);
         view.level = build.attribute("level").and_then(|l| l.parse().ok()).unwrap_or(1);
         view.version = build.attribute("targetVersion").map(str::to_string);
-        // PoB writes killing them all as "None".
-        view.bandit = build.attribute("bandit").map(|b| if b == "None" { "Kill All".to_string() } else { b.to_string() });
-        for god in ["pantheonMajorGod", "pantheonMinorGod"] {
-            if let Some(g) = build.attribute(god).filter(|g| *g != "None") {
-                view.pantheon.push(format!("Soul of {g}"));
-            }
-        }
+        view.bandit = build.attribute("bandit").map(bandit_name);
+        view.pantheon = pantheon(|god| build.attribute(god));
         for stat in build.children().filter(|n| n.has_tag_name("PlayerStat")) {
             if let (Some(name), Some(value)) = (stat.attribute("stat"), stat.attribute("value").and_then(|v| v.parse().ok())) {
                 view.stats.insert(name.to_string(), value);
@@ -332,7 +405,24 @@ pub fn parse(xml: &str) -> Result<BuildView, String> {
     }
     if let Some(config) = child("Config") {
         let (sets, active) = sets_of(&config, "ConfigSet", "activeConfigSet");
-        view.configs = sets.iter().map(|s| ConfigView { id: s.attribute("id").map(str::to_string), title: title_of(s), config: read_config(s) }).collect();
+        let input = |set: &roxmltree::Node<'_, '_>, name: &str| {
+            set.children().find(|n| n.has_tag_name("Input") && n.attribute("name") == Some(name)).and_then(|n| n.attribute("string")).map(str::to_string)
+        };
+        // PoB keeps them per configuration, and leaves out its defaults (all bandits
+        // killed, no pantheon); older builds keep them only on the build.
+        let keys = ["bandit", "pantheonMajorGod", "pantheonMinorGod"];
+        let per_set = sets.iter().any(|s| keys.iter().any(|k| input(s, k).is_some()));
+        view.configs = sets
+            .iter()
+            .map(|s| {
+                let (bandit, pantheon) = if per_set {
+                    (Some(bandit_name(&input(s, "bandit").unwrap_or_else(|| "None".into()))), pantheon(|god| input(s, god)))
+                } else {
+                    (view.bandit.clone(), view.pantheon.clone())
+                };
+                ConfigView { id: s.attribute("id").map(str::to_string), title: title_of(s), config: read_config(s), bandit, pantheon }
+            })
+            .collect();
         view.active.config = active;
     }
     if let Some(notes) = child("Notes") {
@@ -674,20 +764,37 @@ fn read_spec(spec: &roxmltree::Node, texts: &ItemTexts) -> TreeView {
             Some((node.trim().parse().ok()?, effect.trim().parse().ok()?))
         })
         .collect();
-    let jewels = spec
-        .descendants()
-        .filter(|n| n.has_tag_name("Socket"))
-        .filter_map(|s| texts.get(s.attribute("itemId").filter(|id| *id != "0")?))
-        .map(|(text, ranges)| GearItem { slot: "Jewel".into(), item: read_pob_item(text, ranges) })
-        .collect();
+    let mut jewels = Vec::new();
+    let mut sockets = BTreeMap::new();
+    for socket in spec.descendants().filter(|n| n.has_tag_name("Socket")) {
+        let Some((text, ranges)) = socket.attribute("itemId").filter(|id| *id != "0").and_then(|id| texts.get(id)) else { continue };
+        if let Some(node) = socket.attribute("nodeId").and_then(|n| n.parse().ok()) {
+            sockets.insert(node, jewels.len());
+        }
+        jewels.push(GearItem { slot: "Jewel".into(), item: read_pob_item(text, ranges) });
+    }
     TreeView {
         title: title_of(spec),
         version: spec.attribute("treeVersion").map(str::to_string),
         jewels,
+        sockets,
         nodes,
         mastery_effects,
         ..Default::default()
     }
+}
+
+/// PoB writes killing all the bandits as "None".
+fn bandit_name(b: &str) -> String {
+    if b == "None" { "Kill All".to_string() } else { b.to_string() }
+}
+
+/// "Soul of Arakaali", "Soul of Shakari", from PoB's major and minor god.
+fn pantheon<S: AsRef<str>>(god: impl Fn(&str) -> Option<S>) -> Vec<String> {
+    ["pantheonMajorGod", "pantheonMinorGod"]
+        .into_iter()
+        .filter_map(|k| god(k).filter(|g| g.as_ref() != "None").map(|g| format!("Soul of {}", g.as_ref())))
+        .collect()
 }
 
 /// A config set's summary: the settings that change the numbers most.
@@ -864,6 +971,8 @@ struct Assets {
     unique_names: Vec<String>,
     /// Gem variant id → colour.
     gem_colours: HashMap<String, &'static str>,
+    /// The passive tree as it's drawn.
+    layout: TreeLayout,
     /// The wiki's gems, by page name ("Melee Physical Damage Support").
     gems: HashMap<String, WikiGem>,
     tree: TreeIndex,
@@ -904,6 +1013,12 @@ const WIKI: &str = "https://www.poewiki.net";
 const TREE: &str = "https://raw.githubusercontent.com/grindinggear/skilltree-export/master/data.json";
 
 impl BuildAssets {
+    /// The passive tree as it's drawn: where each node is, what joins them, and GGG's
+    /// pictures for them.
+    pub async fn layout(&self, price: &PriceService) -> TreeLayout {
+        self.get(price).await.layout.clone()
+    }
+
     async fn get(&self, price: &PriceService) -> Arc<Assets> {
         if let Some(a) = self.loaded.lock().unwrap().clone() {
             return a;
@@ -989,6 +1104,7 @@ impl BuildAssets {
             for (node, effect) in &t.mastery_effects {
                 if let Some((n, text)) = a.tree.nodes.get(node).and_then(|n| Some((n, n.masteries.get(effect)?))) {
                     t.masteries.push(format!("{}: {text}", n.name));
+                    t.mastery_picks.insert(*node, text.clone());
                 }
             }
         }
@@ -1152,6 +1268,7 @@ async fn load_assets(price: &PriceService) -> Assets {
     }
     if let Some(v) = json(price.cached_url("passive-tree.json", TREE, WEEK).await) {
         a.tree = tree_index(&v);
+        a.layout = tree_layout(&v);
     }
     a.gems = load_wiki_gems(price).await;
     a
@@ -1224,6 +1341,201 @@ fn wiki_file(file: &str) -> String {
     let file = file.replace(' ', "_");
     let hash = format!("{:x}", md5::compute(file.as_bytes()));
     format!("{WIKI}/images/{}/{}/{}", &hash[..1], &hash[..2], encode(&file))
+}
+
+/* The passive tree, drawn */
+
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TreeLayout {
+    pub nodes: Vec<LayoutNode>,
+    pub edges: Vec<LayoutEdge>,
+    /// GGG's picture sheets by kind ("normalActive", "frame"…), with the pictures used.
+    pub sprites: BTreeMap<String, SpriteSheet>,
+    /// The sheets' zoom: a picture w px wide is w / zoom wide on the tree.
+    pub zoom: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LayoutNode {
+    pub id: u32,
+    pub x: f64,
+    pub y: f64,
+    /// normal, notable, keystone, mastery, jewel, classStart or ascendancyStart
+    pub kind: &'static str,
+    pub name: String,
+    pub stats: Vec<String>,
+    /// The node's picture, by its name on the sheets.
+    pub icon: String,
+    /// A mastery's pictures, unchosen and chosen.
+    pub inactive_icon: Option<String>,
+    pub active_icon: Option<String>,
+    /// A mastery's effects to choose from.
+    pub options: Vec<String>,
+    pub ascendancy: Option<String>,
+    /// A class start's class: "Duelist".
+    pub class: Option<String>,
+}
+
+/// A line between two nodes; nodes on the same circle are joined along it, around
+/// (cx, cy).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LayoutEdge {
+    pub a: u32,
+    pub b: u32,
+    pub arc: Option<[f64; 3]>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SpriteSheet {
+    pub url: String,
+    /// Picture name → [x, y, w, h] on the sheet.
+    pub coords: BTreeMap<String, [f64; 4]>,
+}
+
+/// Where nodes sit on an orbit of 16 and of 40, in degrees from the top; the others
+/// are spaced evenly.
+const ORBIT_16: [f64; 16] = [0., 30., 45., 60., 90., 120., 135., 150., 180., 210., 225., 240., 270., 300., 315., 330.];
+const ORBIT_40: [f64; 40] = [
+    0., 10., 20., 30., 40., 45., 50., 60., 70., 80., 90., 100., 110., 120., 130., 135., 140., 150., 160., 170., 180., 190., 200., 210., 220.,
+    225., 230., 240., 250., 260., 270., 280., 290., 300., 310., 315., 320., 330., 340., 350.,
+];
+
+fn orbit_angle(per_orbit: u64, index: u64) -> f64 {
+    let degrees = match per_orbit {
+        16 => ORBIT_16.get(index as usize).copied().unwrap_or_default(),
+        40 => ORBIT_40.get(index as usize).copied().unwrap_or_default(),
+        n => 360.0 * index as f64 / n.max(1) as f64,
+    };
+    degrees.to_radians()
+}
+
+/// GGG's tree export, laid out for drawing: the nodes the tree shows (not cluster
+/// jewels' templates), their places from their group and orbit, and the lines.
+fn tree_layout(v: &serde_json::Value) -> TreeLayout {
+    let radii: Vec<f64> = v["constants"]["orbitRadii"].as_array().into_iter().flatten().filter_map(|r| r.as_f64()).collect();
+    let per_orbit: Vec<u64> = v["constants"]["skillsPerOrbit"].as_array().into_iter().flatten().filter_map(|r| r.as_u64()).collect();
+    let classes: Vec<String> = v["classes"].as_array().into_iter().flatten().map(|c| c["name"].as_str().unwrap_or_default().to_string()).collect();
+    let groups = &v["groups"];
+    let text = |n: &serde_json::Value, k: &str| n[k].as_str().map(str::to_string);
+    let flag = |n: &serde_json::Value, k: &str| n[k].as_bool() == Some(true);
+
+    let mut nodes = Vec::new();
+    // id → (x, y, group, orbit, ascendancy)
+    let mut placed: HashMap<u32, (f64, f64, u64, u64, Option<String>)> = HashMap::new();
+    for (id, n) in v["nodes"].as_object().into_iter().flatten() {
+        let (Ok(id), Some(group)) = (id.parse::<u32>(), n["group"].as_u64()) else { continue };
+        let g = &groups[group.to_string()];
+        if flag(n, "isProxy") || flag(g, "isProxy") {
+            continue;
+        }
+        let (Some(gx), Some(gy)) = (g["x"].as_f64(), g["y"].as_f64()) else { continue };
+        let orbit = n["orbit"].as_u64().unwrap_or(0);
+        let r = radii.get(orbit as usize).copied().unwrap_or(0.0);
+        let angle = orbit_angle(per_orbit.get(orbit as usize).copied().unwrap_or(1), n["orbitIndex"].as_u64().unwrap_or(0));
+        let (x, y) = (gx + r * angle.sin(), gy - r * angle.cos());
+        let kind = if n["classStartIndex"].is_number() {
+            "classStart"
+        } else if flag(n, "isAscendancyStart") {
+            "ascendancyStart"
+        } else if flag(n, "isMastery") {
+            "mastery"
+        } else if flag(n, "isJewelSocket") {
+            "jewel"
+        } else if flag(n, "isKeystone") {
+            "keystone"
+        } else if flag(n, "isNotable") {
+            "notable"
+        } else {
+            "normal"
+        };
+        let ascendancy = text(n, "ascendancyName");
+        placed.insert(id, (x, y, group, orbit, ascendancy.clone()));
+        let lines = |k: &str| -> Vec<String> { n[k].as_array().into_iter().flatten().filter_map(|s| s.as_str().map(str::to_string)).collect() };
+        nodes.push(LayoutNode {
+            id,
+            x,
+            y,
+            kind,
+            name: text(n, "name").unwrap_or_default(),
+            stats: lines("stats"),
+            icon: text(n, "icon").unwrap_or_default(),
+            inactive_icon: text(n, "inactiveIcon"),
+            active_icon: text(n, "activeIcon"),
+            options: n["masteryEffects"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|e| e["stats"].as_array().into_iter().flatten().filter_map(|s| s.as_str()).collect::<Vec<_>>().join(", "))
+                .collect(),
+            ascendancy,
+            class: n["classStartIndex"].as_u64().and_then(|i| classes.get(i as usize)).map(|c| title_case(c)),
+        });
+    }
+    nodes.sort_by_key(|n| n.id);
+
+    let mut edges = Vec::new();
+    for (id, n) in v["nodes"].as_object().into_iter().flatten() {
+        let Ok(a) = id.parse::<u32>() else { continue };
+        let Some(pa) = placed.get(&a) else { continue };
+        for out in n["out"].as_array().into_iter().flatten().filter_map(|o| o.as_str()?.parse::<u32>().ok()) {
+            let Some(pb) = placed.get(&out) else { continue };
+            // A class's start isn't drawn joined to its ascendancy, far off the tree.
+            if pa.4 != pb.4 {
+                continue;
+            }
+            let kinds = [a, out].map(|id| v["nodes"][id.to_string()].clone());
+            if kinds.iter().any(|k| flag(k, "isMastery")) {
+                continue;
+            }
+            let arc = (pa.2 == pb.2 && pa.3 == pb.3 && pa.3 > 0).then(|| {
+                let g = &groups[pa.2.to_string()];
+                [g["x"].as_f64().unwrap_or(0.0), g["y"].as_f64().unwrap_or(0.0), radii.get(pa.3 as usize).copied().unwrap_or(0.0)]
+            });
+            edges.push(LayoutEdge { a, b: out, arc });
+        }
+    }
+
+    // The sheets at their sharpest, with only the pictures the tree uses.
+    let zoom_key = v["imageZoomLevels"].as_array().and_then(|z| z.last()).and_then(|z| z.as_f64()).unwrap_or(0.5);
+    let zoom_name = v["imageZoomLevels"].as_array().and_then(|z| z.last()).map(|z| z.to_string()).unwrap_or_else(|| "0.5".into());
+    let mut used: HashSet<&str> = HashSet::new();
+    for n in &nodes {
+        used.insert(&n.icon);
+        used.extend(n.inactive_icon.as_deref());
+        used.extend(n.active_icon.as_deref());
+    }
+    let mut sprites = BTreeMap::new();
+    for (kind, sheet) in v["sprites"].as_object().into_iter().flatten() {
+        let wanted = [
+            "normalActive", "notableActive", "keystoneActive", "normalInactive", "notableInactive", "keystoneInactive", "mastery",
+            "masteryInactive", "masteryActiveSelected", "frame", "jewel", "startNode", "ascendancy",
+        ];
+        if !wanted.contains(&kind.as_str()) {
+            continue;
+        }
+        let Some(level) = sheet.get(&zoom_name).or_else(|| sheet.as_object()?.values().next_back()) else { continue };
+        let all_of_it = matches!(kind.as_str(), "frame" | "jewel" | "startNode" | "ascendancy");
+        let coords = level["coords"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(name, _)| all_of_it || used.contains(name.as_str()))
+            .filter_map(|(name, c)| Some((name.clone(), [c["x"].as_f64()?, c["y"].as_f64()?, c["w"].as_f64()?, c["h"].as_f64()?])))
+            .collect();
+        let Some(url) = level["filename"].as_str() else { continue };
+        sprites.insert(kind.clone(), SpriteSheet { url: url.to_string(), coords });
+    }
+    TreeLayout { nodes, edges, sprites, zoom: zoom_key }
+}
+
+/// "DUELIST" → "Duelist".
+fn title_case(s: &str) -> String {
+    let lower = s.to_lowercase();
+    let mut c = lower.chars();
+    c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
 }
 
 /// An item picture's size in cells, from the picture's address: the part after
@@ -1302,6 +1614,48 @@ mod tests {
     }
 
     #[test]
+    fn reads_bandits_per_configuration() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build3.code");
+        let view = parse(&decode(&std::fs::read_to_string(path).unwrap()).unwrap()).unwrap();
+        let bandit = |title: &str| view.configs.iter().find(|c| c.title.as_deref() == Some(title)).and_then(|c| c.bandit.clone());
+        assert_eq!(bandit("Lvl 77 (Uber Lab)").as_deref(), Some("Alira"));
+        assert_eq!(bandit("Lvl 96").as_deref(), Some("Kill All"));
+        let pantheon = |title: &str| view.configs.iter().find(|c| c.title.as_deref() == Some(title)).map(|c| c.pantheon.clone()).unwrap();
+        assert!(pantheon("Lvl 77 (Uber Lab)").is_empty());
+        assert_eq!(pantheon("Lvl 96"), ["Soul of Arakaali", "Soul of Shakari"]);
+        assert_eq!(pantheon("Lvl 100 Giga Endgame - Deep Delve"), ["Soul of Lunaris", "Soul of Tukohama"]);
+    }
+
+    #[test]
+    fn moves_builds_off_groups() {
+        let group = |name: &str, searches: usize, build: bool| crate::searches::SearchGroup {
+            id: name.to_lowercase(),
+            name: name.into(),
+            searches: (0..searches)
+                .map(|i| crate::searches::SavedSearch {
+                    id: format!("{name}{i}"),
+                    name: "s".into(),
+                    league: "Standard".into(),
+                    body: serde_json::json!({}),
+                    live: false,
+                })
+                .collect(),
+            build: build.then(|| StoredBuild { code: "x".into(), source: None }),
+        };
+        let mut groups = vec![group("Slayer", 3, true), group("Imported", 0, true), group("Flips", 2, false), group("Empty", 0, false)];
+        let mut store = BuildStore { path: std::env::temp_dir().join("poe-tool-unused.json"), builds: Vec::new() };
+        assert!(store.take_from_groups(&mut groups));
+        let names: Vec<_> = groups.iter().map(|g| g.name.as_str()).collect();
+        // The build's own group with no searches goes; groups of searches stay.
+        assert_eq!(names, ["Slayer", "Flips", "Empty"]);
+        assert_eq!(store.builds.len(), 2);
+        assert_eq!(store.builds[0].searches.as_deref(), Some("slayer"));
+        assert_eq!(store.builds[1].searches, None);
+        assert!(groups.iter().all(|g| g.build.is_none()));
+        assert!(!store.take_from_groups(&mut groups));
+    }
+
+    #[test]
     fn names_wiki_pictures() {
         assert_eq!(wiki_icon("Diamond Flask"), "https://www.poewiki.net/images/c/c9/Diamond_Flask_inventory_icon.png");
         assert_eq!(wiki_file("General's Cry inventory icon.png"), "https://www.poewiki.net/images/1/1d/General%27s_Cry_inventory_icon.png");
@@ -1363,6 +1717,24 @@ mod tests {
         println!("points {} asc {} keystones {:?}", tree.points, tree.ascendancy_points, tree.keystones);
         println!("asc notables {:?}", tree.ascendancy_notables);
         println!("masteries {:?}", tree.masteries);
+        let layout = BuildAssets::default().layout(&price).await;
+        let duelist = layout.nodes.iter().find(|n| n.class.as_deref() == Some("Duelist")).unwrap();
+        assert!(duelist.y > 3000.0 && duelist.x.abs() < 50.0, "{} {}", duelist.x, duelist.y);
+        assert!(layout.nodes.len() > 2500 && layout.edges.len() > 2500, "{} {}", layout.nodes.len(), layout.edges.len());
+        assert!(layout.edges.iter().any(|e| e.arc.is_some()));
+        // Every allocated node of the build is drawn.
+        let drawn: HashSet<u32> = layout.nodes.iter().map(|n| n.id).collect();
+        assert!(tree.nodes.iter().all(|n| drawn.contains(n)));
+        for n in &layout.nodes {
+            let sheet = match n.kind {
+                "mastery" => "mastery",
+                "keystone" => "keystoneActive",
+                "notable" => "notableActive",
+                "normal" => "normalActive",
+                _ => continue,
+            };
+            assert!(layout.sprites[sheet].coords.contains_key(&n.icon), "{} {}", n.name, n.icon);
+        }
         let missing: Vec<_> = gear.iter().chain(&tree.jewels).filter(|g| g.item.icon.is_none()).map(|g| g.slot.as_str()).collect();
         assert!(missing.is_empty(), "{missing:?}");
         // PoB users name items themselves; the picture and tooltip go by the unique's name.

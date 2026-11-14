@@ -191,8 +191,8 @@ function BuildList({
       </button>
 
       <div className="builds-head">
-        <span className="label">Builds</span>
-        <button className="icon-btn" title="New build" onClick={() => setAdding((a) => !a)}>
+        <span className="label">Groups</span>
+        <button className="icon-btn" title="New group" onClick={() => setAdding((a) => !a)}>
           +
         </button>
       </div>
@@ -221,7 +221,7 @@ function BuildList({
         <input
           className="builds-filter"
           type="search"
-          placeholder="Find a build"
+          placeholder="Find a group"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
         />
@@ -244,7 +244,7 @@ function BuildList({
           );
         })}
         {groups.length === 0 && !adding && (
-          <p className="muted small builds-empty">Press + to make a build and keep its searches together.</p>
+          <p className="muted small builds-empty">Press + to make a group and keep searches together.</p>
         )}
       </div>
     </aside>
@@ -552,7 +552,7 @@ function Overview({
       <header className="main-head">
         <div>
           <h1>Live overview</h1>
-          <p className="lede">Every search you watch, across your builds.</p>
+          <p className="lede">Every search you watch, across your groups.</p>
         </div>
       </header>
       <Board
@@ -564,7 +564,7 @@ function Overview({
         run={run}
         showBuild
         allowAll
-        empty="No search is live. Open a build and turn on Live for a search."
+        empty="No search is live. Open a group and turn on Live for a search."
       />
     </>
   );
@@ -609,7 +609,7 @@ function BuildView({
             }
           }}
         >
-          Remove build
+          Remove group
         </button>
       </header>
       <Board
@@ -850,7 +850,7 @@ function EditSearch({
           <input type="text" value={detail.name} onChange={(e) => set({ name: e.target.value })} />
         </label>
         <label>
-          <span className="label">Build</span>
+          <span className="label">Group</span>
           <select value={detail.groupId} onChange={(e) => set({ groupId: e.target.value })}>
             {groups.map((g) => (
               <option key={g.id} value={g.id}>
@@ -873,7 +873,7 @@ function EditSearch({
         <span className="label">Or search for another link instead</span>
         <input
           type="text"
-          placeholder="A link from the trade site replaces everything above but the name and build"
+          placeholder="A link from the trade site replaces everything above but the name and group"
           value={link}
           onChange={(e) => setLink(e.target.value)}
         />
@@ -1114,7 +1114,7 @@ export function TradeSearchView({
       <header className="main-head">
         <div>
           <h1>Search</h1>
-          <p className="lede">Search the trade site with its own filters. Keep a search in a build to watch it live.</p>
+          <p className="lede">Search the trade site with its own filters. Keep a search in a group to watch it live.</p>
         </div>
       </header>
 
@@ -1167,7 +1167,7 @@ export function TradeSearchView({
             </button>
           </>
         ) : (
-          <button className="btn" onClick={() => setSaving(true)} disabled={groups.length === 0} title={groups.length === 0 ? "Make a build first" : undefined}>
+          <button className="btn" onClick={() => setSaving(true)} disabled={groups.length === 0} title={groups.length === 0 ? "Make a group first" : undefined}>
             Save as search…
           </button>
         )}

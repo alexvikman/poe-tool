@@ -58,7 +58,7 @@ function App() {
         {page === "builds" && (
           <BuildsPage
             onOpenSearches={(groupId) => {
-              // Searches opens at the build it remembers.
+              // Searches opens at the group it remembers.
               try {
                 localStorage.setItem("searches.selected", groupId);
               } catch {

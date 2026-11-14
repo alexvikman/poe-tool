@@ -240,7 +240,7 @@ export function PriceResult({ check }: { check: PriceCheck }) {
           </div>
           <div className="trade-actions">
             {!bulk && (
-              <button className="btn" onClick={() => setSaving(!saving)} title="Keep this search under a build">
+              <button className="btn" onClick={() => setSaving(!saving)} title="Keep this search in a group">
                 Save search
               </button>
             )}
@@ -386,7 +386,7 @@ function RollBar({
   );
 }
 
-/** Saves the search as it is now under a build, new or existing. */
+/** Saves the search as it is now in a group, new or existing. */
 function SaveSearch({
   defaultName,
   onSave,
@@ -427,10 +427,10 @@ function SaveSearch({
             {g.name}
           </option>
         ))}
-        <option value="new">New build…</option>
+        <option value="new">New group…</option>
       </select>
       {groupId === "new" && (
-        <input type="text" placeholder="Build name" value={newGroup} onChange={(e) => setNewGroup(e.target.value)} />
+        <input type="text" placeholder="Group name" value={newGroup} onChange={(e) => setNewGroup(e.target.value)} />
       )}
       <input type="text" placeholder="Search name" value={name} onChange={(e) => setName(e.target.value)} />
       <button className="btn primary" onClick={save} disabled={groupId === "new" && !newGroup.trim()}>

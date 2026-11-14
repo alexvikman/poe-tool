@@ -2090,6 +2090,12 @@ select {
 }
 
 /* Builds: a Path of Building build */
+.searches-pick {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
 
 .build-import {
   display: flex;
@@ -2424,6 +2430,79 @@ select {
 .gem-white { color: #dddddd; }
 
 /* Tree */
+.passive-tree {
+  position: relative;
+  height: 640px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: #07080a;
+}
+
+.passive-tree.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.passive-tree canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+}
+
+.passive-tree canvas.dragging {
+  cursor: grabbing;
+}
+
+.tree-controls {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 4px;
+}
+
+.tree-controls .btn {
+  min-width: 30px;
+  background: rgba(13, 16, 23, 0.9);
+}
+
+/* A passive's text, as the game shows it. */
+.node-tip {
+  max-width: 380px;
+  padding: 8px 12px 10px;
+  background: #050505;
+  border: 1px solid #4a4030;
+  border-radius: 4px;
+  font-size: 13px;
+  text-align: center;
+}
+
+.node-tip-name {
+  font-size: 15px;
+  color: #c8c8c8;
+  margin-bottom: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #2a2620;
+}
+
+.node-tip-notable .node-tip-name { color: #e0c27a; }
+.node-tip-keystone .node-tip-name { color: #f0d79a; }
+.node-tip-ascendancy .node-tip-name { color: #c9a8e8; }
+.node-tip-mastery .node-tip-name { color: #9fd3e8; }
+
+.node-tip-stat {
+  color: #8888ff;
+  line-height: 1.45;
+}
+
+.node-tip-note {
+  font-size: 12px;
+  margin-bottom: 2px;
+}
+
 .build-tree {
   display: flex;
   flex-direction: column;
@@ -2482,30 +2561,3 @@ select {
   margin: 0;
 }
 
-.pob-service {
-  margin-top: auto;
-  padding: 10px 4px 0;
-  border-top: 1px solid var(--line);
-}
-
-.pob-service form {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: 8px;
-}
-
-.pob-service input {
-  background: var(--bg);
-  color: var(--text);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 6px 8px;
-  font: inherit;
-  font-size: 13px;
-}
-
-.pob-service .hint {
-  margin: 0;
-  font-size: 11px;
-}

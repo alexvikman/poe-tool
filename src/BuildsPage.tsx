@@ -1,9 +1,22 @@
 import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { buildView, calcLoadout, importBuild, removeBuild, type BuildView, type GearItem, type Gem, type GemGroup, type Loadout } from "./builds";
-import { getSettings, setSettings, type Settings } from "./townMute";
-import { listGroups, type HitItem, type SearchGroup } from "./searches";
+import {
+  buildView,
+  calcLoadout,
+  importBuild,
+  listBuilds,
+  removeBuild,
+  updateBuild,
+  type BuildView,
+  type GearItem,
+  type Gem,
+  type GemGroup,
+  type Loadout,
+  type SavedBuild,
+} from "./builds";
+import { addGroup, listGroups, type HitItem, type SearchGroup } from "./searches";
 import { HoverCard, ItemPicture, ItemTooltip } from "./ItemView";
+import { PassiveTree } from "./PassiveTree";
 
 function remembered(): string | null {
   try {
@@ -21,18 +34,24 @@ function remember(id: string) {
   }
 }
 
-/** Builds from Path of Building: stats, gear, gems and tree. A build is the same
- *  build as in Searches: its searches belong to it. */
+/** Builds from Path of Building: stats, gear, gems and tree. A build may use a group
+ *  of searches from Searches; the two are apart otherwise. */
 export function BuildsPage({ onOpenSearches }: { onOpenSearches: (groupId: string) => void }) {
+  const [builds, setBuilds] = useState<SavedBuild[]>([]);
   const [groups, setGroups] = useState<SearchGroup[]>([]);
   const [selected, setSelected] = useState<string | null>(remembered);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // A saved service address reopens the build, so it's used.
-  const [serviceSaves, setServiceSaves] = useState(0);
 
-  const reload = () => listGroups().then(setGroups, (e) => setError(String(e)));
+  const reload = () =>
+    Promise.all([listBuilds(), listGroups()]).then(
+      ([b, g]) => {
+        setBuilds(b);
+        setGroups(g);
+      },
+      (e) => setError(String(e)),
+    );
   useEffect(() => {
     reload();
   }, []);
@@ -45,7 +64,7 @@ export function BuildsPage({ onOpenSearches }: { onOpenSearches: (groupId: strin
   async function add() {
     setBusy(true);
     try {
-      const id = await importBuild(input, null);
+      const id = await importBuild(input);
       setInput("");
       setError(null);
       await reload();
@@ -57,7 +76,7 @@ export function BuildsPage({ onOpenSearches }: { onOpenSearches: (groupId: strin
     }
   }
 
-  const group = groups.find((g) => g.id === selected) ?? groups.find((g) => g.build) ?? groups[0];
+  const build = builds.find((b) => b.id === selected) ?? builds[0];
 
   return (
     <div className="searches">
@@ -85,99 +104,78 @@ export function BuildsPage({ onOpenSearches }: { onOpenSearches: (groupId: strin
           <span className="label">Builds</span>
         </div>
         <div className="builds-scroll">
-          {groups.map((g) => (
-            <button
-              key={g.id}
-              className={`build-item ${group?.id === g.id ? "active" : ""}`}
-              onClick={() => select(g.id)}
-            >
-              <span className="build-name">{g.name}</span>
-              <span className="build-meta">
-                {!g.build && <span className="muted small">no PoB</span>}
-                {g.searches.length > 0 && <span className="muted">{g.searches.length}</span>}
-              </span>
+          {builds.map((b) => (
+            <button key={b.id} className={`build-item ${build?.id === b.id ? "active" : ""}`} onClick={() => select(b.id)}>
+              <span className="build-name">{b.name}</span>
             </button>
           ))}
-          {groups.length === 0 && <p className="muted small builds-empty">Import a build to start.</p>}
+          {builds.length === 0 && <p className="muted small builds-empty">Import a build to start.</p>}
         </div>
-        <PobServiceSettings onSaved={() => setServiceSaves((n) => n + 1)} />
       </aside>
-      <section className="searches-main" key={`${group?.id ?? "none"}-${serviceSaves}`}>
-        {group &&
-          (group.build ? (
-            <Build group={group} onChanged={reload} onOpenSearches={() => onOpenSearches(group.id)} />
-          ) : (
-            <ImportInto group={group} onDone={reload} onOpenSearches={() => onOpenSearches(group.id)} />
-          ))}
+      <section className="searches-main" key={build?.id ?? "none"}>
+        {build ? (
+          <Build build={build} searchGroups={groups} onChanged={reload} onOpenSearches={onOpenSearches} />
+        ) : (
+          <p className="muted">Import a build from Path of Building to see its gear, gems, tree and stats.</p>
+        )}
       </section>
     </div>
   );
 }
 
-/** A build from Searches without a PoB build yet. */
-function ImportInto({
-  group,
-  onDone,
-  onOpenSearches,
+/** Which group of searches a build uses: none, one from Searches, or a new one
+ *  named after it. */
+function SearchesPick({
+  build,
+  groups,
+  onChanged,
+  onOpen,
 }: {
-  group: SearchGroup;
-  onDone: () => void;
-  onOpenSearches: () => void;
+  build: SavedBuild;
+  groups: SearchGroup[];
+  onChanged: () => void;
+  onOpen: (groupId: string) => void;
 }) {
-  const [input, setInput] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function go() {
-    setBusy(true);
-    try {
-      await importBuild(input, group.id);
-      onDone();
-    } catch (e) {
-      setError(String(e));
-      setBusy(false);
+  const linked = groups.find((g) => g.id === build.searches);
+  async function pick(value: string) {
+    if (value === "new") {
+      const group = await addGroup(build.name);
+      await updateBuild(build.id, { searches: group.id });
+    } else {
+      await updateBuild(build.id, { searches: value || null });
     }
+    onChanged();
   }
-
   return (
-    <>
-      <header className="main-head">
-        <div>
-          <h1>{group.name}</h1>
-          <p className="lede">
-            No Path of Building build here yet. Import one to see its gear, gems, tree and stats beside its{" "}
-            <button className="link-btn" onClick={onOpenSearches}>
-              {group.searches.length} searches
-            </button>
-            .
-          </p>
-        </div>
-      </header>
-      <form
-        className="inline-form"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (input.trim()) go();
-        }}
-      >
-        <input type="text" placeholder="pobb.in link or PoB code" value={input} onChange={(e) => setInput(e.target.value)} />
-        <button className="btn primary" type="submit" disabled={!input.trim() || busy}>
-          {busy ? "Importing…" : "Import"}
+    <span className="searches-pick">
+      <select className="set-select" value={linked?.id ?? ""} onChange={(e) => pick(e.target.value)} title="The group of searches this build uses">
+        <option value="">No searches</option>
+        {groups.map((g) => (
+          <option key={g.id} value={g.id}>
+            Searches: {g.name} ({g.searches.length})
+          </option>
+        ))}
+        <option value="new">New group of searches…</option>
+      </select>
+      {linked && (
+        <button className="btn small-btn" onClick={() => onOpen(linked.id)}>
+          Open searches
         </button>
-      </form>
-      {error && <p className="bad small">{error}</p>}
-    </>
+      )}
+    </span>
   );
 }
 
 function Build({
-  group,
+  build,
+  searchGroups,
   onChanged,
   onOpenSearches,
 }: {
-  group: SearchGroup;
+  build: SavedBuild;
+  searchGroups: SearchGroup[];
   onChanged: () => void;
-  onOpenSearches: () => void;
+  onOpenSearches: (groupId: string) => void;
 }) {
   const [view, setView] = useState<BuildView | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -195,21 +193,21 @@ function Build({
     const key = `${sel.itemSet}-${sel.skillSet}-${sel.tree}-${sel.config}`;
     if (calcs[key]) return;
     setCalcs((c) => ({ ...c, [key]: { busy: true } }));
-    calcLoadout(group.id, sel).then(
+    calcLoadout(build.id, sel).then(
       (r) => setCalcs((c) => ({ ...c, [key]: { busy: false, stats: r.stats, version: r.pobVersion } })),
       (e) => setCalcs((c) => ({ ...c, [key]: { busy: false, error: String(e) } })),
     );
   }, [view, sel]);
 
   useEffect(() => {
-    buildView(group.id).then(
+    buildView(build.id).then(
       (v) => {
         setView(v);
         setSel(v.active);
       },
       (e) => setError(String(e)),
     );
-  }, [group.id, group.build?.code]);
+  }, [build.id]);
 
   if (error) return <p className="bad">{error}</p>;
   if (!view || !sel) return <p className="muted">Reading the build…</p>;
@@ -217,7 +215,7 @@ function Build({
   const gear = view.itemSets[sel.itemSet]?.gear ?? [];
   const tree = view.trees[sel.tree];
   const groups = view.skillSets[sel.skillSet]?.groups ?? [];
-  const config = view.configs[sel.config]?.config ?? [];
+  const config = view.configs[sel.config];
   const loadoutAt = view.loadouts.findIndex(
     (l) => l.itemSet === sel.itemSet && l.skillSet === sel.skillSet && l.tree === sel.tree && l.config === sel.config,
   );
@@ -240,7 +238,7 @@ function Build({
           </h1>
           {view.version && <span className="build-version">{view.version.replace("_", ".")}</span>}
         </div>
-        <BuildStats stats={stats} view={view} config={config} />
+        <BuildStats stats={stats} config={config} />
         {!exported && (
           <p className={`small build-stats-note ${calc?.error ? "bad" : "muted"}`}>
             {calc?.busy
@@ -266,12 +264,13 @@ function Build({
               Open source ↗
             </button>
           )}
-          <button className="btn small-btn" onClick={onOpenSearches}>
-            Searches ({group.searches.length})
-          </button>
+          <SearchesPick build={build} groups={searchGroups} onChanged={onChanged} onOpen={onOpenSearches} />
           <button
             className="btn small-btn"
-            onClick={() => confirm(`Take the PoB build off ${group.name}? Its searches stay.`) && removeBuild(group.id).then(onChanged)}
+            onClick={() =>
+              confirm(`Remove ${build.name}?${build.searches ? " Its searches stay in Searches." : ""}`) &&
+              removeBuild(build.id).then(onChanged, (e) => setError(String(e)))
+            }
           >
             Remove build
           </button>
@@ -330,6 +329,7 @@ function Build({
             </div>
             <SetPick sets={view.trees} value={sel.tree} onPick={(t) => setSel({ ...sel, tree: t })} />
           </div>
+          <PassiveTree tree={tree} className={view.class} ascendancy={view.ascendancy} />
           <NodeList title="Keystones" names={tree.keystones} kind="keystone" />
           <NodeList title={view.ascendancy ?? "Ascendancy"} names={tree.ascendancyNotables} kind="ascendancy" />
           <NodeList title="Notables" names={tree.notables} kind="notable" />
@@ -357,68 +357,12 @@ interface Calc {
   error?: string;
 }
 
-/** Another Path of Building service than PoE Tool's own, such as a local copy for
- *  testing. */
-function PobServiceSettings({ onSaved }: { onSaved: () => void }) {
-  const [settings, setLocal] = useState<Settings | null>(null);
-  const [url, setUrl] = useState("");
-  const [key, setKey] = useState("");
-  const [open, setOpen] = useState(false);
-  const [saved, setSaved] = useState(false);
-
-  useEffect(() => {
-    getSettings().then((s) => {
-      setLocal(s);
-      setUrl(s.pobService?.url ?? "");
-      setKey(s.pobService?.apiKey ?? "");
-    });
-  }, []);
-
-  if (!settings) return null;
-  const on = !!settings.pobService?.url?.trim();
-
-  async function save() {
-    const next = { ...settings!, pobService: { url: url.trim(), apiKey: key.trim() } };
-    await setSettings(next);
-    setLocal(next);
-    onSaved();
-    setSaved(true);
-    setTimeout(() => setSaved(false), 1500);
-  }
-
-  return (
-    <div className="pob-service">
-      <button className="link-btn" onClick={() => setOpen((o) => !o)}>
-        Path of Building service: {on ? settings.pobService.url : "PoE Tool's"}
-      </button>
-      {open && (
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            save();
-          }}
-        >
-          <input type="text" placeholder="Empty: PoE Tool's own" value={url} onChange={(e) => setUrl(e.target.value)} />
-          <input type="password" placeholder="Its key (if another)" value={key} onChange={(e) => setKey(e.target.value)} />
-          <button className="btn small-btn" type="submit">
-            {saved ? "Saved" : "Save"}
-          </button>
-          <p className="hint">
-            Path of Building calculates a build's other loadouts on PoE Tool's service; the build is sent there. Point it
-            at another copy here, for example one running locally.
-          </p>
-        </form>
-      )}
-    </div>
-  );
-}
-
 /* Stats */
 
 const num = (n: number, digits = 0) =>
   n.toLocaleString("en-US", { maximumFractionDigits: digits, minimumFractionDigits: 0 });
 
-function BuildStats({ stats, view, config }: { stats: Record<string, number>; view: BuildView; config: string[] }) {
+function BuildStats({ stats, config }: { stats: Record<string, number>; config: BuildView["configs"][number] | undefined }) {
   const s = stats;
   const has = (k: string) => s[k] != null && s[k] !== 0;
   const stat = (label: string, value: React.ReactNode, cls = "") => (
@@ -481,11 +425,11 @@ function BuildStats({ stats, view, config }: { stats: Record<string, number>; vi
         {has("CritMultiplier") && stat("Crit Multi", `${num(s.CritMultiplier * 100)}%`)}
         {has("EffectiveMovementSpeedMod") && stat("Movement", `${num(s.EffectiveMovementSpeedMod * 100)}%`)}
       </div>
-      {config.length > 0 && <div>{stat("Config", config.join(", "))}</div>}
-      {(view.bandit || view.pantheon.length > 0) && (
+      {config && config.config.length > 0 && <div>{stat("Config", config.config.join(", "))}</div>}
+      {config && (config.bandit || config.pantheon.length > 0) && (
         <div>
-          {view.bandit && stat("Bandit", view.bandit)}
-          {view.pantheon.length > 0 && stat("Pantheon", view.pantheon.join(", "))}
+          {config.bandit && stat("Bandit", config.bandit)}
+          {config.pantheon.length > 0 && stat("Pantheon", config.pantheon.join(", "))}
         </div>
       )}
     </div>

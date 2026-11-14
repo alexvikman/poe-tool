@@ -34,8 +34,6 @@ export interface Settings {
   townMute: TownMuteSettings;
   priceCheck: PriceCheckSettings;
   chatCommands: ChatCommand[];
-  /** The web service that calculates builds with Path of Building; off without a url. */
-  pobService: { url: string; apiKey: string };
 }
 
 export interface Status {
