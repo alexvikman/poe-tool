@@ -422,13 +422,14 @@ pub fn build_query(
     let mut misc = serde_json::Map::new();
     match item.rarity {
         Rarity::Unique => {
-            // Foulborn and Vestigial uniques are their own versions on the site.
+            // Foulborn (the site calls them mutated) and Vestigial uniques are their own
+            // versions on the site.
             let name = item.name.as_deref().unwrap_or_default();
             let foulborn = name.strip_prefix("Foulborn ");
             let vestigial = base_type.strip_prefix("Vestigial ");
             query["name"] = json!(foulborn.unwrap_or(name));
             query["type"] = json!(vestigial.unwrap_or(base_type));
-            misc.insert("foulborn_item".into(), json!({ "option": foulborn.is_some() }));
+            misc.insert("mutated".into(), json!({ "option": foulborn.is_some() }));
             if vestigial.is_none() {
                 misc.insert("vestigial".into(), json!({ "option": false }));
             }
@@ -625,7 +626,7 @@ mod tests {
         assert_eq!(q["query"]["name"], "Belt of the Deceiver");
         assert_eq!(q["query"]["status"]["option"], "securable");
         assert_eq!(q["query"]["filters"]["misc_filters"]["filters"]["corrupted"]["option"], false);
-        assert_eq!(q["query"]["filters"]["misc_filters"]["filters"]["foulborn_item"]["option"], false);
+        assert_eq!(q["query"]["filters"]["misc_filters"]["filters"]["mutated"]["option"], false);
     }
 
     #[test]
@@ -636,7 +637,7 @@ mod tests {
         .unwrap();
         let q = build_query(&item, "Heavy Belt", None, &[], &SearchOptions::for_item(&item, false), "Covens");
         assert_eq!(q["query"]["name"], "Belt of the Deceiver");
-        assert_eq!(q["query"]["filters"]["misc_filters"]["filters"]["foulborn_item"]["option"], true);
+        assert_eq!(q["query"]["filters"]["misc_filters"]["filters"]["mutated"]["option"], true);
     }
 
     #[test]
