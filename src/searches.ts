@@ -10,11 +10,12 @@ export interface SavedSearch {
   live: boolean;
 }
 
-/** A group of searches, usually a build ("Shockwave Cyclone"). */
+/** A build ("Shockwave Cyclone"): its searches, and its Path of Building build once imported. */
 export interface SearchGroup {
   id: string;
   name: string;
   searches: SavedSearch[];
+  build?: { code: string; source: string | null };
 }
 
 export type LiveStatus =

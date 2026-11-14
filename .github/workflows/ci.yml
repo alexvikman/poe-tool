@@ -51,6 +51,11 @@ jobs:
           # from forks; those build without update signatures.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # The Path of Building service's address and its key for this release, built
+          # into the app (not kept in the source). Without them, builds' other loadouts
+          # can't be calculated.
+          POB_SERVICE_URL: ${{ secrets.POB_SERVICE_URL }}
+          POB_SERVICE_KEY: ${{ secrets.POB_SERVICE_KEY }}
         # 0.1.<run> so an install shows which build it is and the updater sees it as newer.
         run: |
           if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then

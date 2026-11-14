@@ -85,6 +85,18 @@ pub struct Settings {
     pub town_mute: TownMuteSettings,
     pub price_check: PriceCheckSettings,
     pub chat_commands: Vec<ChatCommand>,
+    pub pob_service: PobServiceSettings,
+}
+
+/// Another Path of Building service than PoE Tool's own (a local copy, for testing).
+/// Empty is PoE Tool's own.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PobServiceSettings {
+    /// "http://localhost:8080", without a path.
+    pub url: String,
+    /// Its key, when it needs another than the one PoE Tool ships with.
+    pub api_key: String,
 }
 
 impl Default for Settings {
@@ -97,6 +109,7 @@ impl Default for Settings {
                 text: "/hideout".into(),
                 ..ChatCommand::default()
             }],
+            pob_service: PobServiceSettings::default(),
         }
     }
 }

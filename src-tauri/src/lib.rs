@@ -1,5 +1,6 @@
 mod areas;
 pub mod audio;
+mod builds;
 mod client_log;
 mod game;
 mod hotkey;
@@ -43,6 +44,7 @@ struct AppState {
     price: Arc<PriceService>,
     searches: Arc<Mutex<SearchStore>>,
     live: Arc<Live>,
+    build_assets: Arc<builds::BuildAssets>,
 }
 
 impl AppState {
@@ -363,6 +365,84 @@ fn searches_add_query(
     state.searches.lock().unwrap().add_search(&group_id, search)
 }
 
+/// Imports a Path of Building build (a pobb.in, pastebin or poe.ninja link, or a PoB
+/// code) into a build, or as a new build named after it. Says which build.
+#[tauri::command]
+async fn builds_import(state: State<'_, AppState>, group_id: Option<String>, input: String) -> Result<String, String> {
+    let (code, source) = builds::fetch_code(state.price.http(), &input).await?;
+    let view = builds::parse(&builds::decode(&code)?)?;
+    let stored = builds::StoredBuild { code, source };
+    let mut store = state.searches.lock().unwrap();
+    let id = match group_id {
+        Some(id) => {
+            store.group_mut(&id)?.build = Some(stored);
+            id
+        }
+        None => {
+            let group = store.add_group(&builds::title(&view))?;
+            store.group_mut(&group.id)?.build = Some(stored);
+            group.id
+        }
+    };
+    store.save()?;
+    Ok(id)
+}
+
+/// A build as the Builds page shows it.
+#[tauri::command]
+async fn builds_view(state: State<'_, AppState>, group_id: String) -> Result<builds::BuildView, String> {
+    let stored = {
+        let store = state.searches.lock().unwrap();
+        let group = store.groups.iter().find(|g| g.id == group_id).ok_or("That build is gone.")?;
+        group.build.clone().ok_or("No Path of Building build here yet.")?
+    };
+    let mut view = builds::parse(&builds::decode(&stored.code)?)?;
+    view.code = stored.code;
+    view.source = stored.source;
+    state.build_assets.dress(&state.price, &mut view).await;
+    Ok(view)
+}
+
+/// Stats for a build with these sets chosen, from the PoB service.
+#[tauri::command]
+async fn builds_calc(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    group_id: String,
+    pick: builds::Loadout,
+) -> Result<builds::Calculated, String> {
+    // PoE Tool's own service unless a setting points elsewhere.
+    let service = state.settings.lock().unwrap().pob_service.clone();
+    let url = Some(service.url.trim())
+        .filter(|u| !u.is_empty())
+        .or(builds::SERVICE_URL.filter(|u| !u.trim().is_empty()))
+        .ok_or("This build of PoE Tool has no Path of Building service. Set one under the builds list.")?
+        .to_string();
+    let key = Some(service.api_key.trim())
+        .filter(|k| !k.is_empty())
+        .or(builds::SERVICE_KEY)
+        .unwrap_or_default()
+        .to_string();
+    let agent = format!("PoE-Tool/{}", app.package_info().version);
+    let code = {
+        let store = state.searches.lock().unwrap();
+        let group = store.groups.iter().find(|g| g.id == group_id).ok_or("That build is gone.")?;
+        group.build.as_ref().ok_or("No Path of Building build here yet.")?.code.clone()
+    };
+    let xml = builds::decode(&code)?;
+    let view = builds::parse(&xml)?;
+    let xml = builds::with_sets(&xml, &view, &pick);
+    builds::calculate(state.price.http(), &url, &key, &agent, &xml).await
+}
+
+/// Takes the PoB build off a build, keeping its searches.
+#[tauri::command]
+fn builds_remove(state: State<AppState>, group_id: String) -> Result<(), String> {
+    let mut store = state.searches.lock().unwrap();
+    store.group_mut(&group_id)?.build = None;
+    store.save()
+}
+
 /// One of the trade site's data files for the search form: "filters", "stats", "items".
 #[tauri::command]
 async fn trade_data(state: State<'_, AppState>, kind: String) -> Result<serde_json::Value, String> {
@@ -618,6 +698,7 @@ pub fn run() {
                 price: price.clone(),
                 searches,
                 live,
+                build_assets: Arc::new(builds::BuildAssets::default()),
             });
             app.state::<AppState>().sync_live();
 
@@ -716,6 +797,10 @@ pub fn run() {
             live_state,
             trade_currencies,
             trade_data,
+            builds_import,
+            builds_view,
+            builds_remove,
+            builds_calc,
             trade_search,
             trade_search_more,
             searches_add_query,

@@ -2088,3 +2088,360 @@ select {
   padding: 5px 8px;
   font: inherit;
 }
+
+/* Builds: a Path of Building build, laid out like pobb.in */
+
+.build-import {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 4px 12px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.build-import input {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 7px 9px;
+  font: inherit;
+}
+
+.build-import .hint {
+  margin: 0;
+  font-size: 11px;
+}
+
+.build {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.build-head {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.build-title-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.build-title-line h1 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.build-version {
+  color: var(--text-dim);
+  font-size: 12px;
+  vertical-align: super;
+}
+
+.build-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 14px;
+}
+
+.build-stats > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+
+.bstat-label {
+  color: var(--text-dim);
+}
+
+.build-stats sup {
+  font-size: 10px;
+  margin-left: 1px;
+}
+
+.c-life { color: #e05f5f; }
+.c-es { color: #9fd3e8; }
+.c-mana { color: #6c95f0; }
+.c-str { color: #e05f5f; }
+.c-dex { color: #7bc35a; }
+.c-int { color: #6c95f0; }
+.c-fire { color: #e0823f; }
+.c-cold { color: #6c95f0; }
+.c-light { color: #e3d15a; }
+.c-chaos { color: #c06ad6; }
+.c-dps { color: var(--text); font-weight: 600; }
+
+.build-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.build-columns {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 28px;
+  align-items: start;
+}
+
+@container (max-width: 900px) {
+  .build-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.small-label {
+  margin-top: 6px;
+}
+
+/* The inventory: cells of 47.46px, as the item pictures are drawn. */
+.gear {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.inventory {
+  display: grid;
+  grid-template-columns: repeat(8, 47.4645px);
+  grid-template-rows: repeat(6, 47.4645px);
+  grid-template-areas:
+    "w1 w1 . helm helm . w2 w2"
+    "w1 w1 . helm helm amulet w2 w2"
+    "w1 w1 ring1 body body ring2 w2 w2"
+    "w1 w1 . body body . w2 w2"
+    "gloves gloves . body body . boots boots"
+    "gloves gloves . belt belt . boots boots";
+  gap: 4px;
+}
+
+.inv-slot {
+  border-radius: 6px;
+  background: #0d1017;
+  border: 1px solid #1c2230;
+}
+
+.gear-slot {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1;
+}
+
+.gear-slot.loose {
+  padding: 4px;
+  border-radius: 6px;
+  background: #0d1017;
+  border: 1px solid #1c2230;
+}
+
+.gear-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: calc(8 * 47.4645px + 28px);
+}
+
+.gear-noicon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-size: 10px;
+  color: var(--text-dim);
+  overflow: hidden;
+}
+
+/* The item's tooltip, on hover. */
+.gear-pop {
+  display: none;
+  position: absolute;
+  left: 100%;
+  top: 0;
+  width: 440px;
+  z-index: 30;
+  margin-left: 8px;
+  pointer-events: none;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.7);
+}
+
+.gear-pop.left {
+  left: auto;
+  right: 100%;
+  margin-left: 0;
+  margin-right: 8px;
+}
+
+.gear-slot:hover {
+  /* Above the other slots, so its tooltip covers them. */
+  z-index: 40;
+}
+
+.gear-slot:hover .gear-pop {
+  display: block;
+}
+
+/* Solid over the page, unlike a listing's. */
+.gear-pop .tooltip {
+  background: #050505;
+}
+
+/* Gems, as PoB colours them. */
+.gem-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.gem-group {
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  font-size: 13px;
+}
+
+.gem-group.main {
+  border-color: var(--accent);
+}
+
+.gem-group.off {
+  opacity: 0.55;
+}
+
+.gem-group-head {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 2px;
+}
+
+.slot-icon {
+  display: inline-flex;
+  align-items: flex-start;
+  color: #c8b48a;
+}
+
+.slot-swap {
+  font-size: 9px;
+  margin-left: 1px;
+}
+
+.gem.off {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+.gem.support {
+  padding-left: 4px;
+}
+
+.gem-branch {
+  color: var(--text-dim);
+  margin-right: 4px;
+}
+
+.gem-lvl {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.gem-red { color: #e06a5f; }
+.gem-green { color: #84c35d; }
+.gem-blue { color: #7f9ff2; }
+.gem-white { color: #dddddd; }
+
+/* Tree */
+.build-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.node-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.node-keystone { color: #e0c27a; border-color: #6b5a36; }
+.node-ascendancy { color: #c9a8e8; }
+.node-mastery { color: #9fd3e8; }
+
+.build-notes {
+  white-space: pre-wrap;
+  font: inherit;
+  color: var(--text-dim);
+  margin: 6px 0 0;
+}
+
+/* Choosing PoB's sets: a loadout, or gear, gems and tree on their own */
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.set-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.set-select,
+.set-pick select {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 13px;
+  max-width: 340px;
+}
+
+.loadout-pick select {
+  font-size: 14px;
+  padding: 6px 10px;
+}
+
+.build-stats-note {
+  margin: 0;
+}
+
+.pob-service {
+  margin-top: auto;
+  padding: 10px 4px 0;
+  border-top: 1px solid var(--line);
+}
+
+.pob-service form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.pob-service input {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 13px;
+}
+
+.pob-service .hint {
+  margin: 0;
+  font-size: 11px;
+}

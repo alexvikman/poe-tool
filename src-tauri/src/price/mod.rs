@@ -326,6 +326,13 @@ impl PriceService {
     /// A trade-site data file, from the disk cache when fresh, else downloaded.
     /// Falls back to a stale copy when the site can't be reached.
     async fn cached(&self, file: &str, path: &str, max_age: Duration) -> Result<Vec<u8>, String> {
+        self.cached_url(file, &format!("{}{path}", trade::SITE), max_age).await
+            .map_err(|e| format!("Trade site: {e}"))
+    }
+
+    /// A file from the web, from the disk cache when fresh, else downloaded; a stale
+    /// copy when the download fails.
+    pub async fn cached_url(&self, file: &str, url: &str, max_age: Duration) -> Result<Vec<u8>, String> {
         let local = self.cache_dir.join(file);
         let fresh = std::fs::metadata(&local)
             .and_then(|m| m.modified())
@@ -340,11 +347,11 @@ impl PriceService {
         let download = async {
             let resp = self
                 .http
-                .get(format!("{}{path}", trade::SITE))
+                .get(url)
                 .send()
                 .await
                 .and_then(|r| r.error_for_status())
-                .map_err(|e| format!("Trade site: {e}"))?;
+                .map_err(|e| e.to_string())?;
             resp.bytes().await.map_err(|e| e.to_string())
         };
         match download.await {
@@ -355,6 +362,11 @@ impl PriceService {
             }
             Err(e) => std::fs::read(&local).map_err(|_| e),
         }
+    }
+
+    /// The HTTP client, for other parts of the app that fetch from the web.
+    pub fn http(&self) -> &reqwest::Client {
+        &self.http
     }
 }
 

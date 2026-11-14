@@ -19,6 +19,9 @@ pub struct SearchGroup {
     pub name: String,
     #[serde(default)]
     pub searches: Vec<SavedSearch>,
+    /// The build from Path of Building, once imported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<crate::builds::StoredBuild>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,7 +64,7 @@ impl SearchStore {
         if name.is_empty() {
             return Err("Give the build a name.".into());
         }
-        let group = SearchGroup { id: new_id(), name: name.to_string(), searches: Vec::new() };
+        let group = SearchGroup { id: new_id(), name: name.to_string(), searches: Vec::new(), build: None };
         self.groups.push(group.clone());
         self.save()?;
         Ok(group)
