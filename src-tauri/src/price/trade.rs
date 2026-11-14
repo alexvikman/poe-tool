@@ -9,7 +9,29 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 pub const SITE: &str = "https://www.pathofexile.com";
-const FETCH_COUNT: usize = 10;
+/// Listings shown per search, fetched 10 at a time (the site's limit per request).
+const SHOW_COUNT: usize = 20;
+const FETCH_BATCH: usize = 10;
+
+/// Search choices besides the stat filters.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchOptions {
+    /// None: either.
+    pub corrupted: Option<bool>,
+    /// Only listings that can be bought at once from a merchant tab.
+    pub instant_buyout: bool,
+}
+
+impl SearchOptions {
+    /// Uniques and gems are priced by whether they are corrupted; other items aren't.
+    pub fn for_item(item: &Item) -> Self {
+        SearchOptions {
+            corrupted: matches!(item.rarity, Rarity::Unique | Rarity::Gem).then_some(item.corrupted),
+            instant_buyout: false,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -132,12 +154,15 @@ impl TradeClient {
         let found: SearchResponse = resp.json().await.map_err(net_error)?;
         let site_url = format!("{SITE}/trade/search/{}/{}", urlencode(league), found.id);
 
-        let ids: Vec<&str> = found.result.iter().take(FETCH_COUNT).map(String::as_str).collect();
         let mut listings = Vec::new();
-        if !ids.is_empty() {
+        for batch in found.result.iter().take(SHOW_COUNT).collect::<Vec<_>>().chunks(FETCH_BATCH) {
             if let Some(wait) = self.fetch_limit.lock().unwrap().acquire() {
-                return Err(rate_limited(wait));
+                if listings.is_empty() {
+                    return Err(rate_limited(wait));
+                }
+                break; // Show what we have rather than nothing.
             }
+            let ids: Vec<&str> = batch.iter().map(|s| s.as_str()).collect();
             let url = format!("{SITE}/api/trade/fetch/{}", ids.join(","));
             let resp = http
                 .get(url)
@@ -148,22 +173,17 @@ impl TradeClient {
             self.fetch_limit.lock().unwrap().update(resp.headers());
             let resp = check_status(resp).await?;
             let fetched: FetchResponse = resp.json().await.map_err(net_error)?;
-            listings = fetched
-                .result
-                .into_iter()
-                .flatten()
-                .filter_map(|r| {
-                    let price = r.listing.price?;
-                    Some(Listing {
-                        amount: price.amount,
-                        currency: price.currency,
-                        indexed: r.listing.indexed,
-                        account: r.listing.account.name,
-                        item_level: r.item.ilvl,
-                        corrupted: r.item.corrupted.unwrap_or(false),
-                    })
+            listings.extend(fetched.result.into_iter().flatten().filter_map(|r| {
+                let price = r.listing.price?;
+                Some(Listing {
+                    amount: price.amount,
+                    currency: price.currency,
+                    indexed: r.listing.indexed,
+                    account: r.listing.account.name,
+                    item_level: r.item.ilvl,
+                    corrupted: r.item.corrupted.unwrap_or(false),
                 })
-                .collect();
+            }));
         }
         Ok(TradeResult {
             total: found.total,
@@ -251,9 +271,10 @@ struct FetchItem {
 }
 
 /// The search for items like this one. `filters` are the stat rows the user left on.
-pub fn build_query(item: &Item, base_type: &str, filters: &[StatFilter]) -> Value {
+pub fn build_query(item: &Item, base_type: &str, filters: &[StatFilter], options: &SearchOptions) -> Value {
+    let status = if options.instant_buyout { "securable" } else { "available" };
     let mut query = json!({
-        "status": { "option": "online" },
+        "status": { "option": status },
     });
     let mut misc = serde_json::Map::new();
     match item.rarity {
@@ -269,7 +290,6 @@ pub fn build_query(item: &Item, base_type: &str, filters: &[StatFilter]) -> Valu
             if let Some(q) = item.quality {
                 misc.insert("quality".into(), json!({ "min": q }));
             }
-            misc.insert("corrupted".into(), json!({ "option": item.corrupted }));
         }
         Rarity::Rare | Rarity::Magic | Rarity::Normal => {
             query["type"] = json!(base_type);
@@ -282,15 +302,28 @@ pub fn build_query(item: &Item, base_type: &str, filters: &[StatFilter]) -> Valu
     if item.links >= 5 {
         query["filters"]["socket_filters"] = json!({ "filters": { "links": { "min": item.links } } });
     }
+    if let Some(c) = options.corrupted {
+        misc.insert("corrupted".into(), json!({ "option": c }));
+    }
     if !misc.is_empty() {
         query["filters"]["misc_filters"] = json!({ "filters": misc });
     }
     let stats: Vec<Value> = filters
         .iter()
-        .filter(|f| f.enabled)
-        .map(|f| match f.min {
-            Some(min) => json!({ "id": f.id, "value": { "min": min } }),
-            None => json!({ "id": f.id }),
+        .filter(|f| f.enabled && !f.id.is_empty())
+        .map(|f| {
+            let mut value = serde_json::Map::new();
+            if let Some(min) = f.min {
+                value.insert("min".into(), json!(min));
+            }
+            if let Some(max) = f.max {
+                value.insert("max".into(), json!(max));
+            }
+            if value.is_empty() {
+                json!({ "id": f.id })
+            } else {
+                json!({ "id": f.id, "value": value })
+            }
         })
         .collect();
     query["stats"] = json!([{ "type": "and", "filters": stats }]);
@@ -329,25 +362,48 @@ mod tests {
                 text: String::new(),
                 value: Some(100.0),
                 min: Some(85.0),
+                max: None,
                 enabled: true,
                 kind: "pseudo".into(),
+                roll: None,
+                tier: None,
             },
             StatFilter {
                 id: "explicit.stat_1".into(),
                 text: String::new(),
                 value: None,
                 min: None,
+                max: Some(10.0),
                 enabled: false,
                 kind: "explicit".into(),
+                roll: None,
+                tier: None,
             },
         ];
-        let q = build_query(&item, "Two-Toned Boots", &filters);
+        let q = build_query(&item, "Two-Toned Boots", &filters, &SearchOptions::for_item(&item));
+        assert_eq!(q["query"]["status"]["option"], "available");
+        assert!(q["query"]["filters"]["misc_filters"].is_null());
         assert_eq!(q["query"]["type"], "Two-Toned Boots");
         assert_eq!(q["query"]["filters"]["type_filters"]["filters"]["rarity"]["option"], "nonunique");
         assert_eq!(
             q["query"]["stats"][0]["filters"],
             json!([{ "id": "pseudo.pseudo_total_life", "value": { "min": 85.0 } }])
         );
+    }
+
+    #[test]
+    fn query_for_a_unique_has_corrupted_and_buyout_options() {
+        let item = super::super::item::parse(
+            "Item Class: Belts\nRarity: Unique\nBelt of the Deceiver\nHeavy Belt\n--------\nItem Level: 84",
+        )
+        .unwrap();
+        let mut options = SearchOptions::for_item(&item);
+        assert_eq!(options.corrupted, Some(false));
+        options.instant_buyout = true;
+        let q = build_query(&item, "Heavy Belt", &[], &options);
+        assert_eq!(q["query"]["name"], "Belt of the Deceiver");
+        assert_eq!(q["query"]["status"]["option"], "securable");
+        assert_eq!(q["query"]["filters"]["misc_filters"]["filters"]["corrupted"]["option"], false);
     }
 
     #[test]

@@ -1,0 +1,24 @@
+Item Class: Boots
+Rarity: Rare
+Grim League
+Two-Toned Boots
+--------
+Armour: 240 (augmented)
+Evasion Rating: 240 (augmented)
+--------
+Requirements:
+Level: 70
+--------
+Item Level: 80
+--------
+{ Implicit Modifier — Elemental, Fire, Cold, Resistance }
++20(16-20)% to Fire and Cold Resistances (implicit)
+--------
+{ Prefix Modifier "Hero's" (Tier: 2) — Defences, Armour, Evasion }
+83(80-91)% increased Armour and Evasion
+{ Prefix Modifier "Athlete's" (Tier: 1) — Life }
++117(115-129) to maximum Life
+{ Suffix Modifier "of the Apt" (Rank: 1) }
+32% reduced Attribute Requirements
+{ Suffix Modifier "of the Maelstrom" (Tier: 3) — Elemental, Lightning, Resistance }
++36(36-41)% to Lightning Resistance

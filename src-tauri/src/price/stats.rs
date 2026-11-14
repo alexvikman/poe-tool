@@ -1,6 +1,6 @@
 //! Matches item mod lines to the trade site's stat ids, and finds base types.
 
-use super::item::{Item, ItemMod, ModKind, Rarity};
+use super::item::{Item, ItemMod, ModKind, Rarity, Roll};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -43,13 +43,21 @@ pub struct ItemEntry {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StatFilter {
+    /// Empty when the trade site has no stat for this line (shown, but not searchable).
     pub id: String,
     /// What the user sees: the item's own line, or the pseudo stat's text.
     pub text: String,
     pub value: Option<f64>,
     pub min: Option<f64>,
+    #[serde(default)]
+    pub max: Option<f64>,
     pub enabled: bool,
     pub kind: String,
+    /// The range the mod can roll in, when the item was copied with Ctrl+Alt+C.
+    #[serde(default)]
+    pub roll: Option<Roll>,
+    #[serde(default)]
+    pub tier: Option<u32>,
 }
 
 pub struct StatIndex {
@@ -126,6 +134,8 @@ impl StatIndex {
         if let Some(rest) = template.strip_prefix('-') {
             tries.push((format!("+{rest}"), -1.0));
         }
+        // Lines whose numbers are fixed text on the site, such as "within 2.5 metres".
+        tries.push((m.text.clone(), 0.0));
         for (text, sign) in tries {
             let local_text = format!("{text} (Local)");
             let candidates: [&str; 2] = if local {
@@ -135,18 +145,22 @@ impl StatIndex {
             };
             for c in candidates {
                 if let Some(id) = self.by_text.get(&(group.clone(), c.to_string())) {
-                    return Some((id.clone(), value.map(|v| v * sign)));
+                    let value = if sign == 0.0 { None } else { value.map(|v| v * sign) };
+                    return Some((id.clone(), value));
                 }
             }
         }
         None
     }
 
-    /// The filters for a trade search of a rare or magic item: pseudo totals for life
-    /// and resistances, then each mod. Mods the totals cover start turned off.
+    /// The filters for a trade search: for rares and magic items, pseudo totals for
+    /// life and resistances, then each mod (those the totals cover start off); for
+    /// uniques, each mod, with the ones that roll in a range turned on. Lines the trade
+    /// site has no stat for are listed with an empty id.
     pub fn filters(&self, item: &Item) -> Vec<StatFilter> {
+        let unique = item.rarity == Rarity::Unique;
         let local = WEAPON_OR_ARMOUR.contains(&item.item_class.as_str());
-        let pseudo = pseudo_totals(&item.mods);
+        let pseudo = if unique { Vec::new() } else { pseudo_totals(&item.mods) };
         let mut out: Vec<StatFilter> = pseudo
             .iter()
             .map(|(id, text, value)| StatFilter {
@@ -154,31 +168,59 @@ impl StatIndex {
                 text: text.replace('#', &format_value(*value)),
                 value: Some(*value),
                 min: min_for(*value),
+                max: None,
                 enabled: true,
                 kind: "pseudo".into(),
+                roll: None,
+                tier: None,
             })
             .collect();
 
         for m in &item.mods {
-            if matches!(m.kind, ModKind::Enchant | ModKind::Scourge | ModKind::Crucible) {
+            if matches!(m.kind, ModKind::Scourge | ModKind::Crucible) {
                 continue;
             }
-            let Some((id, value)) = self.match_mod(m, local) else {
+            let matched = self.match_mod(m, local);
+            if matched.is_none() && m.affix.is_none() && !m.text.chars().any(|c| c.is_ascii_digit()) {
+                // Probably flavour text from the plain copy, not a mod.
                 continue;
+            }
+            let (id, value) = matched.unwrap_or_default();
+            let variable = m.roll.is_some_and(|r| r.max > r.min);
+            let enabled = !id.is_empty()
+                && if unique {
+                    variable && m.kind == ModKind::Explicit
+                } else {
+                    let covered = !pseudo.is_empty() && is_covered_by_pseudo(&m.text);
+                    let filler = FILLER_MODS.iter().any(|f| m.text.contains(f));
+                    !covered && !filler && !matches!(m.kind, ModKind::Crafted | ModKind::Enchant)
+                };
+            let min = match (unique, value, m.roll) {
+                (true, Some(v), Some(r)) if r.max > r.min => Some(min_in_roll(v, r)),
+                (true, Some(v), _) => Some(v),
+                (_, v, _) => v.and_then(min_for),
             };
-            let covered = !pseudo.is_empty() && is_covered_by_pseudo(&m.text);
-            let filler = FILLER_MODS.iter().any(|f| m.text.contains(f));
             out.push(StatFilter {
                 id,
                 text: m.text.clone(),
                 value,
-                min: value.and_then(min_for),
-                enabled: !covered && !filler && m.kind != ModKind::Crafted,
+                min,
+                max: None,
+                enabled,
                 kind: m.kind.trade_group().into(),
+                roll: m.roll,
+                tier: m.tier,
             });
         }
         out
     }
+}
+
+/// Just below the item's roll: a tenth of the roll's range lower, never under the
+/// range itself. `18 (15-25)` → 17.
+fn min_in_roll(value: f64, roll: Roll) -> f64 {
+    let (lo, hi) = if roll.min <= roll.max { (roll.min, roll.max) } else { (roll.max, roll.min) };
+    (value - 0.1 * (hi - lo)).ceil().clamp(lo.min(value), value)
 }
 
 /// A minimum a bit below the item's own value. None for negative values ("reduced"),
@@ -289,7 +331,10 @@ mod tests {
                 {"id":"explicit.stat_1671376347","text":"+#% to Lightning Resistance"},
                 {"id":"explicit.stat_3639275092","text":"#% increased Attribute Requirements"},
                 {"id":"explicit.stat_1940865751","text":"Adds # to # Physical Damage (Local)"},
-                {"id":"explicit.stat_960081730","text":"Adds # to # Physical Damage to Attacks"}
+                {"id":"explicit.stat_960081730","text":"Adds # to # Physical Damage to Attacks"},
+                {"id":"explicit.stat_1310194496","text":"#% increased Global Physical Damage"},
+                {"id":"explicit.stat_2901986750","text":"+#% to all Elemental Resistances"},
+                {"id":"explicit.stat_2899095498","text":"Enemies within 2.5 metres are Intimidated"}
               ]},
               {"id":"implicit","entries":[
                 {"id":"implicit.stat_2915988346","text":"+#% to Fire and Cold Resistances"}
@@ -305,7 +350,7 @@ mod tests {
     }
 
     fn m(kind: ModKind, text: &str) -> ItemMod {
-        ItemMod { kind, text: text.into() }
+        ItemMod { kind, text: text.into(), roll: None, affix: None, tier: None }
     }
 
     #[test]
@@ -337,6 +382,44 @@ mod tests {
             Some(("implicit.stat_2915988346".into(), Some(20.0)))
         );
         assert_eq!(idx.match_mod(&m(ModKind::Explicit, "Something unknown"), false), None);
+    }
+
+    #[test]
+    fn unique_filters_turn_on_variable_mods_and_flag_unknown_lines() {
+        let idx = index();
+        let item = super::super::item::parse(
+            "Item Class: Belts
+Rarity: Unique
+Belt of the Deceiver
+Heavy Belt
+--------
+Item Level: 84
+--------
+{ Unique Modifier \u{2014} Damage }
+18(15-25)% increased Global Physical Damage
+{ Unique Modifier \u{2014} Life }
++37(30-40) to maximum Life
+{ Unique Modifier }
++15(10-15)% to all Elemental Resistances
+{ Unique Modifier }
+Enemies within 2.5 metres are Intimidated \u{2014} Unscalable Value
+{ Unique Modifier }
+Something the site doesn't know",
+        )
+        .unwrap();
+        let f = idx.filters(&item);
+        let rows: Vec<(&str, bool, Option<f64>)> =
+            f.iter().map(|f| (f.id.as_str(), f.enabled, f.min)).collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("explicit.stat_1310194496", true, Some(17.0)),
+                ("explicit.stat_3299347043", true, Some(36.0)),
+                ("explicit.stat_2901986750", true, Some(15.0)),
+                ("explicit.stat_2899095498", false, None),
+                ("", false, None),
+            ]
+        );
     }
 
     #[test]

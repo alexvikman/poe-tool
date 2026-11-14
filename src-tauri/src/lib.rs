@@ -10,7 +10,7 @@ mod town_mute;
 use audio::Ducker;
 use price::item::Item;
 use price::stats::StatFilter;
-use price::trade::TradeResult;
+use price::trade::{SearchOptions, TradeResult};
 use price::{League, PriceCheck, PriceService};
 use serde::Serialize;
 use settings::Settings;
@@ -77,9 +77,10 @@ async fn price_search(
     item: Item,
     base_type: String,
     filters: Vec<StatFilter>,
+    options: SearchOptions,
     league: String,
 ) -> Result<TradeResult, String> {
-    state.price.search(&item, &base_type, &filters, &league).await
+    state.price.search(&item, &base_type, &filters, &options, &league).await
 }
 
 #[derive(Clone, Serialize)]

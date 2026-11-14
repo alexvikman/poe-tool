@@ -10,9 +10,17 @@ export type Rarity =
   | "divinationCard"
   | "other";
 
+export interface Roll {
+  min: number;
+  max: number;
+}
+
 export interface ItemMod {
   kind: string;
   text: string;
+  roll: Roll | null;
+  affix: string | null;
+  tier: number | null;
 }
 
 export interface Item {
@@ -44,15 +52,27 @@ export interface NinjaPrice {
   corrupted: boolean | null;
   chaos: number;
   listingCount: number | null;
+  /** Price change over the last 7 days, in percent. */
+  change7d: number | null;
 }
 
 export interface StatFilter {
+  /** Empty when the trade site has no stat for this line. */
   id: string;
   text: string;
   value: number | null;
   min: number | null;
+  max: number | null;
   enabled: boolean;
   kind: string;
+  roll: Roll | null;
+  tier: number | null;
+}
+
+export interface SearchOptions {
+  /** null: either. */
+  corrupted: boolean | null;
+  instantBuyout: boolean;
 }
 
 export interface Listing {
@@ -78,6 +98,7 @@ export interface PriceCheck {
   ninja: NinjaPrice[];
   ninjaError: string | null;
   filters: StatFilter[];
+  options: SearchOptions;
   trade: TradeResult | null;
   tradeError: string | null;
 }
@@ -88,11 +109,12 @@ export interface League {
 
 export const priceCheck = (text: string) => invoke<PriceCheck>("price_check", { text });
 
-export const priceSearch = (check: PriceCheck, filters: StatFilter[]) =>
+export const priceSearch = (check: PriceCheck, filters: StatFilter[], options: SearchOptions) =>
   invoke<TradeResult>("price_search", {
     item: check.item,
     baseType: check.baseType,
     filters,
+    options,
     league: check.league,
   });
 

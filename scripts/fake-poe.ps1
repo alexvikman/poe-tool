@@ -7,8 +7,9 @@
 #
 # The fake game is a copy of PowerShell named like the game, in its own folder with a
 # logs\Client.txt next to it, where the tool looks for the log of a running game.
-# Its window answers Ctrl+C like the game: it copies an item (-ItemFile, or a rare
-# pair of boots) to the clipboard.
+# Its window answers Ctrl+C and Ctrl+Alt+C like the game: it copies an item (-ItemFile,
+# or items\rare-boots.txt) to the clipboard. The files in items\ use the advanced
+# copy format (Ctrl+Alt+C), with roll ranges and tiers.
 param(
     [Parameter(Mandatory)][ValidateSet('start', 'enter', 'stop', 'window')][string]$Action,
     [string]$AreaId,
@@ -20,28 +21,7 @@ param(
 $exe = Join-Path $Dir 'PathOfExile_x64.exe'
 $log = Join-Path $Dir 'logs\Client.txt'
 
-$sampleItem = @'
-Item Class: Boots
-Rarity: Rare
-Grim League
-Two-Toned Boots
---------
-Armour: 240 (augmented)
-Evasion Rating: 240 (augmented)
---------
-Requirements:
-Level: 70
---------
-Item Level: 80
---------
-+20% to Fire and Cold Resistances (implicit)
---------
-32% reduced Attribute Requirements
-83% increased Armour and Evasion
-+117 to maximum Life
-+36% to Lightning Resistance
-'@
-
+$sampleItem = Join-Path $PSScriptRoot 'items\rare-boots.txt'
 switch ($Action) {
     'start' {
         New-Item -ItemType Directory -Force (Split-Path $log) | Out-Null
@@ -60,7 +40,7 @@ switch ($Action) {
 '@
         [Native.Win]::ShowWindow([Native.Win]::GetConsoleWindow(), 0) | Out-Null
         Add-Type -AssemblyName System.Windows.Forms
-        $item = if ($ItemFile) { Get-Content -Raw $ItemFile } else { $sampleItem }
+        $item = Get-Content -Raw -Encoding UTF8 $(if ($ItemFile) { $ItemFile } else { $sampleItem })
         $sound = Get-ChildItem 'C:\Windows\Media\*.wav' | Sort-Object Length -Descending | Select-Object -First 1
         $player = New-Object Media.SoundPlayer $sound.FullName
         $player.PlayLooping()

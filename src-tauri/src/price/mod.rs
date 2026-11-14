@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::sync::Mutex;
-use trade::{TradeClient, TradeResult};
+use trade::{SearchOptions, TradeClient, TradeResult};
 
 /// The trade site's stat and base lists change with patches; a day is fresh enough.
 const TRADE_DATA_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
@@ -29,6 +29,7 @@ pub struct PriceCheck {
     pub ninja: Vec<NinjaPrice>,
     pub ninja_error: Option<String>,
     pub filters: Vec<StatFilter>,
+    pub options: SearchOptions,
     pub trade: Option<TradeResult>,
     pub trade_error: Option<String>,
 }
@@ -112,9 +113,10 @@ impl PriceService {
         };
 
         let filters = match item.rarity {
-            Rarity::Rare | Rarity::Magic if item.identified => stats.filters(&item),
+            Rarity::Rare | Rarity::Magic | Rarity::Unique if item.identified => stats.filters(&item),
             _ => Vec::new(),
         };
+        let options = SearchOptions::for_item(&item);
 
         // Bulk items have a good poe.ninja price; spend trade requests on the rest.
         let search = match item.rarity {
@@ -123,7 +125,7 @@ impl PriceService {
             _ => ninja.is_empty(),
         };
         let (trade, trade_error) = if search {
-            match self.search(&item, &base_type, &filters, league).await {
+            match self.search(&item, &base_type, &filters, &options, league).await {
                 Ok(r) => (Some(r), None),
                 Err(e) => (None, Some(e)),
             }
@@ -139,6 +141,7 @@ impl PriceService {
             ninja,
             ninja_error,
             filters,
+            options,
             trade,
             trade_error,
         })
@@ -149,9 +152,10 @@ impl PriceService {
         item: &Item,
         base_type: &str,
         filters: &[StatFilter],
+        options: &SearchOptions,
         league: &str,
     ) -> Result<TradeResult, String> {
-        let query = trade::build_query(item, base_type, filters);
+        let query = trade::build_query(item, base_type, filters, options);
         self.trade.search(&self.http, league, query).await
     }
 

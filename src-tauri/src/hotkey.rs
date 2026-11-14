@@ -1,5 +1,6 @@
-//! The price check hotkey: one key press copies the item
-//! under the cursor (one Ctrl+C to the game, one in-game action) and opens the overlay.
+//! The price check hotkey: one key press copies the item under the cursor (one
+//! Ctrl+Alt+C to the game, one in-game action) and opens the overlay. Ctrl+Alt+C is
+//! the game's advanced copy, which adds each mod's roll range and tier.
 //!
 //! The hotkey is only registered while the game window is in front, so it never takes
 //! the key from other apps.
@@ -48,7 +49,7 @@ pub fn game_is_focused() -> bool {
     false
 }
 
-/// Sends one Ctrl+C to the game and returns the clipboard text it put there.
+/// Sends one Ctrl+Alt+C to the game and returns the clipboard text it put there.
 #[cfg(windows)]
 pub fn copy_item() -> Result<String, String> {
     use windows::Win32::System::DataExchange::GetClipboardSequenceNumber;
@@ -73,18 +74,19 @@ pub fn copy_item() -> Result<String, String> {
     }
 
     let before = unsafe { GetClipboardSequenceNumber() };
-    // Shift or Alt still held from the hotkey would change what Ctrl+C does.
+    // Shift still held from the hotkey would change what the copy does.
     let inputs = [
         key(VK_SHIFT, true),
-        key(VK_MENU, true),
         key(VK_CONTROL, false),
+        key(VK_MENU, false),
         key(VK_C, false),
         key(VK_C, true),
+        key(VK_MENU, true),
         key(VK_CONTROL, true),
     ];
     let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
     if sent as usize != inputs.len() {
-        return Err("Couldn't send Ctrl+C to the game.".into());
+        return Err("Couldn't send Ctrl+Alt+C to the game.".into());
     }
     wait_for_clipboard(|| unsafe { GetClipboardSequenceNumber() } != before)
 }

@@ -36,6 +36,8 @@ pub struct NinjaPrice {
     /// Price of one, in chaos.
     pub chaos: f64,
     pub listing_count: Option<u32>,
+    /// Price change over the last 7 days, in percent.
+    pub change_7d: Option<f64>,
 }
 
 pub struct NinjaIndex {
@@ -65,6 +67,13 @@ struct ExchangeCore {
 struct ExchangeLine {
     id: String,
     primary_value: f64,
+    sparkline: Option<Sparkline>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Sparkline {
+    total_change: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -91,6 +100,7 @@ struct ItemLine {
     corrupted: Option<bool>,
     chaos_value: f64,
     listing_count: Option<u32>,
+    spark_line: Option<Sparkline>,
 }
 
 impl NinjaIndex {
@@ -134,6 +144,7 @@ impl NinjaIndex {
                     corrupted: None,
                     chaos: line.primary_value,
                     listing_count: None,
+                    change_7d: line.sparkline.as_ref().and_then(|s| s.total_change),
                 });
             }
         }
@@ -157,6 +168,7 @@ impl NinjaIndex {
                     corrupted: l.corrupted,
                     chaos: l.chaos_value,
                     listing_count: l.listing_count,
+                    change_7d: l.spark_line.as_ref().and_then(|s| s.total_change),
                 });
             }
         }
@@ -175,6 +187,7 @@ impl NinjaIndex {
                 corrupted: None,
                 chaos: 1.0,
                 listing_count: None,
+                change_7d: None,
             }]
         });
         Ok(NinjaIndex {

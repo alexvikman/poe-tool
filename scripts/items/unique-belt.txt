@@ -1,0 +1,23 @@
+Item Class: Belts
+Rarity: Unique
+Belt of the Deceiver
+Heavy Belt
+--------
+Requirements:
+Level: 20
+--------
+Item Level: 84
+--------
+{ Implicit Modifier — Attribute }
++32(25-35) to Strength (implicit)
+--------
+{ Unique Modifier — Damage, Physical, Attack }
+18(15-25)% increased Global Physical Damage
+{ Unique Modifier — Life }
++37(30-40) to maximum Life
+{ Unique Modifier — Elemental, Fire, Cold, Lightning, Resistance }
++15(10-15)% to all Elemental Resistances
+{ Unique Modifier }
+Enemies within 2.5 metres are Intimidated — Unscalable Value
+--------
+Before you can lie, you must believe.

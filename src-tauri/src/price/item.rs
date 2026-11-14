@@ -42,12 +42,27 @@ impl ModKind {
     }
 }
 
+/// The range a mod can roll in, from the advanced copy (Ctrl+Alt+C): `18(15-25)%`.
+/// For lines with several numbers, the averages, as the trade site counts them.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Roll {
+    pub min: f64,
+    pub max: f64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ItemMod {
     pub kind: ModKind,
-    /// The line as the game wrote it, without the `(implicit)`-style suffix.
+    /// The line as the game wrote it, without ranges or the `(implicit)`-style suffix.
     pub text: String,
+    #[serde(default)]
+    pub roll: Option<Roll>,
+    /// From the advanced copy's `{ … }` header: Prefix, Suffix, Unique, Implicit, …
+    #[serde(default)]
+    pub affix: Option<String>,
+    #[serde(default)]
+    pub tier: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -206,31 +221,127 @@ fn parse_flags(section: &[&str], item: &mut Item) -> bool {
 }
 
 fn parse_mods(section: &[&str], item: &mut Item) {
+    let suffixes = [
+        (" (implicit)", ModKind::Implicit),
+        (" (crafted)", ModKind::Crafted),
+        (" (fractured)", ModKind::Fractured),
+        (" (enchant)", ModKind::Enchant),
+        (" (scourge)", ModKind::Scourge),
+        (" (crucible)", ModKind::Crucible),
+    ];
+    let mut header: Option<Header> = None;
     for line in section {
+        if let Some(h) = parse_header(line) {
+            header = Some(h);
+            continue;
+        }
         if line.starts_with("Note: ") || line.starts_with('"') {
             continue;
         }
-        let suffixes = [
-            (" (implicit)", ModKind::Implicit),
-            (" (crafted)", ModKind::Crafted),
-            (" (fractured)", ModKind::Fractured),
-            (" (enchant)", ModKind::Enchant),
-            (" (scourge)", ModKind::Scourge),
-            (" (crucible)", ModKind::Crucible),
-        ];
-        let (kind, text) = suffixes
-            .iter()
-            .find_map(|(suffix, kind)| line.strip_suffix(suffix).map(|t| (*kind, t)))
-            .unwrap_or((ModKind::Explicit, line));
-        // Flavour text and usage hints have no numbers or are known prose.
-        if kind == ModKind::Explicit && !looks_like_mod(text) {
+        // Reminder text in the advanced copy, such as "(Elemental Damage is …)".
+        if line.starts_with('(') && line.ends_with(')') {
             continue;
         }
+        let line = line.trim_end_matches(" \u{2014} Unscalable Value");
+        let (marker, text) = suffixes
+            .iter()
+            .find_map(|(suffix, kind)| line.strip_suffix(suffix).map(|t| (Some(*kind), t)))
+            .unwrap_or((None, line));
+        let kind = marker
+            .or(header.as_ref().map(|h| h.kind))
+            .unwrap_or(ModKind::Explicit);
+        // Flavour text and usage hints: only in the plain copy, which has no headers.
+        if header.is_none() && marker.is_none() && !looks_like_mod(text) {
+            continue;
+        }
+        let (text, roll) = strip_ranges(text);
         item.mods.push(ItemMod {
             kind,
-            text: text.to_string(),
+            text,
+            roll,
+            affix: header.as_ref().map(|h| h.affix.clone()),
+            tier: header.as_ref().and_then(|h| h.tier),
         });
     }
+}
+
+struct Header {
+    kind: ModKind,
+    affix: String,
+    tier: Option<u32>,
+}
+
+/// `{ Prefix Modifier "Athlete's" (Tier: 1) — Life }`, `{ Unique Modifier }`,
+/// `{ Implicit Modifier — Attribute }`, `{ Master Crafted Suffix Modifier … }`.
+fn parse_header(line: &str) -> Option<Header> {
+    let inner = line.strip_prefix('{')?.strip_suffix('}')?.trim();
+    let kind = if inner.contains("Implicit") {
+        ModKind::Implicit
+    } else if inner.contains("Crafted") {
+        ModKind::Crafted
+    } else if inner.contains("Fractured") {
+        ModKind::Fractured
+    } else if inner.contains("Enchant") {
+        ModKind::Enchant
+    } else if inner.contains("Scourge") {
+        ModKind::Scourge
+    } else {
+        ModKind::Explicit
+    };
+    let affix = ["Prefix", "Suffix", "Unique", "Implicit", "Enchant", "Searing Exarch", "Eater of Worlds"]
+        .iter()
+        .find(|a| inner.contains(*a))
+        .map(|a| a.to_string())
+        .unwrap_or_else(|| "Modifier".into());
+    let tier = ["(Tier: ", "(Rank: "].iter().find_map(|p| {
+        let rest = &inner[inner.find(p)? + p.len()..];
+        leading_number(rest)
+    });
+    Some(Header { kind, affix, tier })
+}
+
+/// `"18(15-25)% increased Global Physical Damage"` →
+/// (`"18% increased Global Physical Damage"`, `Some(15..25)`).
+pub fn strip_ranges(line: &str) -> (String, Option<Roll>) {
+    let mut out = String::with_capacity(line.len());
+    let mut mins = Vec::new();
+    let mut maxes = Vec::new();
+    let mut rest = line;
+    while let Some(open) = rest.find('(') {
+        let before = &rest[..open];
+        let after = &rest[open + 1..];
+        let range = after
+            .find(')')
+            .filter(|_| before.ends_with(|c: char| c.is_ascii_digit()))
+            .and_then(|close| parse_range(&after[..close]).map(|r| (close, r)));
+        match range {
+            Some((close, (min, max))) => {
+                out.push_str(before);
+                mins.push(min);
+                maxes.push(max);
+                rest = &after[close + 1..];
+            }
+            None => {
+                out.push_str(&rest[..=open]);
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    let roll = (!mins.is_empty()).then(|| Roll {
+        min: mins.iter().sum::<f64>() / mins.len() as f64,
+        max: maxes.iter().sum::<f64>() / maxes.len() as f64,
+    });
+    (out, roll)
+}
+
+/// `"15-25"`, `"-15--5"`, `"0.5-1.5"` → (min, max).
+fn parse_range(s: &str) -> Option<(f64, f64)> {
+    let bytes = s.as_bytes();
+    let split = (1..bytes.len()).find(|&i| bytes[i] == b'-' && bytes[i - 1].is_ascii_digit())?;
+    let min = s[..split].trim().parse().ok()?;
+    let max = s[split + 1..].trim().parse().ok()?;
+    Some((min, max))
 }
 
 fn looks_like_mod(line: &str) -> bool {
@@ -296,13 +407,9 @@ Hunter Item
         assert!(item.corrupted);
         assert_eq!(item.influences, vec!["Hunter"]);
         assert_eq!(item.mods.len(), 6);
-        assert_eq!(
-            item.mods[0],
-            ItemMod {
-                kind: ModKind::Implicit,
-                text: "+20% to Fire and Cold Resistances".into()
-            }
-        );
+        assert_eq!(item.mods[0].kind, ModKind::Implicit);
+        assert_eq!(item.mods[0].text, "+20% to Fire and Cold Resistances");
+        assert_eq!(item.mods[0].roll, None);
         assert_eq!(item.mods[5].kind, ModKind::Crafted);
     }
 
@@ -370,6 +477,86 @@ Item has no Level requirement
         assert_eq!(item.name.as_deref(), Some("Tabula Rasa"));
         assert_eq!(item.type_line, "Simple Robe");
         assert_eq!(item.links, 6);
+    }
+
+    const ADVANCED_UNIQUE: &str = "Item Class: Belts
+Rarity: Unique
+Belt of the Deceiver
+Heavy Belt
+--------
+Requirements:
+Level: 20
+--------
+Item Level: 84
+--------
+{ Implicit Modifier \u{2014} Attribute }
++32(25-35) to Strength (implicit)
+--------
+{ Unique Modifier \u{2014} Damage, Physical, Attack }
+18(15-25)% increased Global Physical Damage
+{ Unique Modifier \u{2014} Life }
++37(30-40) to maximum Life
+{ Unique Modifier \u{2014} Elemental, Fire, Cold, Lightning, Resistance }
++15(10-15)% to all Elemental Resistances
+{ Unique Modifier }
+Enemies within 2.5 metres are Intimidated \u{2014} Unscalable Value
+--------
+Before you can lie, you must believe.
+";
+
+    #[test]
+    fn parses_the_advanced_copy() {
+        let item = parse(ADVANCED_UNIQUE).unwrap();
+        let mods: Vec<(ModKind, &str, Option<(f64, f64)>, Option<&str>)> = item
+            .mods
+            .iter()
+            .map(|m| (m.kind, m.text.as_str(), m.roll.map(|r| (r.min, r.max)), m.affix.as_deref()))
+            .collect();
+        assert_eq!(
+            mods,
+            vec![
+                (ModKind::Implicit, "+32 to Strength", Some((25.0, 35.0)), Some("Implicit")),
+                (ModKind::Explicit, "18% increased Global Physical Damage", Some((15.0, 25.0)), Some("Unique")),
+                (ModKind::Explicit, "+37 to maximum Life", Some((30.0, 40.0)), Some("Unique")),
+                (ModKind::Explicit, "+15% to all Elemental Resistances", Some((10.0, 15.0)), Some("Unique")),
+                (ModKind::Explicit, "Enemies within 2.5 metres are Intimidated", None, Some("Unique")),
+            ]
+        );
+    }
+
+    #[test]
+    fn reads_tiers_and_crafted_headers() {
+        let item = parse(
+            "Item Class: Boots
+Rarity: Rare
+Grim League
+Two-Toned Boots
+--------
+Item Level: 80
+--------
+{ Prefix Modifier \"Athlete's\" (Tier: 1) \u{2014} Life }
++117(115-129) to maximum Life
+{ Master Crafted Suffix Modifier \"of Craft\" (Rank: 2) \u{2014} Mana }
++25(20-30) to maximum Mana (crafted)",
+        )
+        .unwrap();
+        assert_eq!(item.mods[0].tier, Some(1));
+        assert_eq!(item.mods[0].affix.as_deref(), Some("Prefix"));
+        assert_eq!(item.mods[1].kind, ModKind::Crafted);
+        assert_eq!(item.mods[1].tier, Some(2));
+    }
+
+    #[test]
+    fn strips_ranges_from_lines() {
+        assert_eq!(
+            strip_ranges("Adds 10(8-12) to 20(18-24) Physical Damage"),
+            ("Adds 10 to 20 Physical Damage".into(), Some(Roll { min: 13.0, max: 18.0 }))
+        );
+        assert_eq!(
+            strip_ranges("-10(-15--5)% to Fire Resistance"),
+            ("-10% to Fire Resistance".into(), Some(Roll { min: -15.0, max: -5.0 }))
+        );
+        assert_eq!(strip_ranges("Socketed Gems (Level 5)"), ("Socketed Gems (Level 5)".into(), None));
     }
 
     #[test]
