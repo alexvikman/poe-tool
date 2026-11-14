@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { getSettings, setSettings, type Settings } from "./townMute";
 import { getLeagues, priceCheck, type League, type PriceCheck } from "./price";
 import { PriceResult } from "./PriceResult";
+import { GemSearch } from "./GemSearch";
 
 export function PricePage() {
   const [settings, setLocal] = useState<Settings | null>(null);
@@ -136,6 +137,17 @@ export function PricePage() {
         <p className="hint">
           Path of Exile must run in Windowed or Windowed Fullscreen for the overlay to show over it.
         </p>
+      </section>
+
+      <section className="card">
+        <div className="field">
+          <span className="label">Labyrinth: transfigured gems</span>
+          <p className="hint">
+            The game can't copy the gems in the Divine Font. Type the gem's name to see what each
+            transfigured version is worth. The overlay offers this too when nothing could be copied.
+          </p>
+        </div>
+        <GemSearch />
       </section>
 
       <section className="card">

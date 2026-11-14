@@ -3,6 +3,7 @@
 #   .\fake-poe.ps1 start                              # a "PathOfExile_x64.exe" window that plays a looping sound
 #   .\fake-poe.ps1 enter 1_1_town "Lioneye's Watch"   # write a zone change to its Client.txt
 #   .\fake-poe.ps1 enter MapWorldsStrand Strand
+#   .\fake-poe.ps1 start -NoCopy                      # copies nothing, like the Labyrinth's Divine Font
 #   .\fake-poe.ps1 stop
 #
 # The fake game is a copy of PowerShell named like the game, in its own folder with a
@@ -15,6 +16,8 @@ param(
     [string]$AreaId,
     [string]$Name,
     [string]$ItemFile,
+    # Copy nothing on Ctrl+C, like the Labyrinth's Divine Font.
+    [switch]$NoCopy,
     [string]$Dir = (Join-Path $env:LOCALAPPDATA 'FakePoE')
 )
 
@@ -29,6 +32,7 @@ switch ($Action) {
         Copy-Item (Join-Path $PSHOME 'powershell.exe') $exe -Force
         $argList = @('-NoProfile', '-Sta', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath, 'window')
         if ($ItemFile) { $argList += @('-ItemFile', (Resolve-Path $ItemFile)) }
+        if ($NoCopy) { $argList += '-NoCopy' }
         Start-Process $exe -ArgumentList $argList
         "Started $exe. Log: $log"
     }
@@ -58,7 +62,7 @@ switch ($Action) {
         $label.Text = "Fake Path of Exile`n`nCtrl+C copies an item, like the game."
         $form.Controls.Add($label)
         $form.Add_KeyDown({
-            if ($_.Control -and $_.KeyCode -eq 'C') { [Windows.Forms.Clipboard]::SetText($item) }
+            if ($_.Control -and $_.KeyCode -eq 'C' -and -not $NoCopy) { [Windows.Forms.Clipboard]::SetText($item) }
         })
         [Windows.Forms.Application]::Run($form)
     }

@@ -6,7 +6,7 @@ pub mod stats;
 pub mod trade;
 
 use item::{Item, Rarity};
-use ninja::{NinjaIndex, NinjaPrice};
+use ninja::{GemFamily, NinjaIndex, NinjaPrice};
 use serde::{Deserialize, Serialize};
 use stats::{ItemsResponse, StatFilter, StatIndex, StatsResponse};
 use std::path::PathBuf;
@@ -34,6 +34,14 @@ pub struct PriceCheck {
     pub options: SearchOptions,
     pub trade: Option<TradeResult>,
     pub trade_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GemSearch {
+    pub league: String,
+    pub divine_chaos: f64,
+    pub families: Vec<GemFamily>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -151,6 +159,16 @@ impl PriceService {
             options,
             trade,
             trade_error,
+        })
+    }
+
+    /// Transfigured gems by base gem name, for the Divine Font in the Labyrinth.
+    pub async fn gem_search(&self, query: &str, league: &str) -> Result<GemSearch, String> {
+        let index = self.ninja_index(league).await?;
+        Ok(GemSearch {
+            league: league.to_string(),
+            divine_chaos: index.divine_chaos,
+            families: index.gem_families(query),
         })
     }
 

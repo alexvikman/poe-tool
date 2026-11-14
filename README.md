@@ -8,7 +8,9 @@ A Windows desktop companion for Path of Exile 1, built with Tauri 2 (Rust) and R
   cursor shows the poe.ninja price (currency, cards, fragments, uniques, gems, …) and live
   listings from the official trade site. Rares get filters from their mods, with pseudo
   totals for life and resistances, which you can turn on and off and search again.
-  Uniques get filters for their rolled mods, with each mod's roll range. Leagues come
+  Uniques get filters for their rolled mods, with each mod's roll range. In the
+  Labyrinth's Divine Font, where the game can't copy gems, the overlay offers a search
+  instead: type the gem's name to see what each transfigured version is worth. Leagues come
   from the trade site (cached for an hour), so a new league needs no update.
 - **Town mute.** Lowers the game's volume in the Windows volume mixer while you're in
   town (and optionally in hideouts), so Goblin Troupes and other noisy pets stay quiet.

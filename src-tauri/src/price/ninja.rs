@@ -46,6 +46,94 @@ pub struct NinjaIndex {
     /// Chaos per divine.
     pub divine_chaos: f64,
     by_name: HashMap<String, Vec<NinjaPrice>>,
+    /// Skill gems by their base gem (a transfigured gem's base is the gem it came from).
+    gems_by_base: HashMap<String, Vec<GemPrice>>,
+}
+
+#[derive(Debug, Clone)]
+struct GemPrice {
+    name: String,
+    transfigured: bool,
+    variant: String,
+    corrupted: bool,
+    chaos: f64,
+    listing_count: Option<u32>,
+}
+
+/// A base gem and the gems the Divine Font can turn it into, for choosing one in the
+/// Labyrinth, where the game doesn't let you copy them.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GemFamily {
+    pub base: String,
+    /// Transfigured gems first, most valuable first; the base gem last.
+    pub gems: Vec<GemOption>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GemOption {
+    pub name: String,
+    pub transfigured: bool,
+    /// Uncorrupted versions, such as "1", "1/20", "20/20", lowest level first.
+    pub prices: Vec<GemVariantPrice>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GemVariantPrice {
+    pub variant: String,
+    pub chaos: f64,
+    pub listing_count: Option<u32>,
+}
+
+fn family(gems: &[GemPrice]) -> GemFamily {
+    let mut names: Vec<(&str, bool)> = Vec::new();
+    for g in gems {
+        if !names.iter().any(|(n, _)| *n == g.name) {
+            names.push((&g.name, g.transfigured));
+        }
+    }
+    let base = gems
+        .iter()
+        .find(|g| !g.transfigured)
+        .map(|g| g.name.clone())
+        .unwrap_or_else(|| {
+            // Only transfigured gems listed: "X of Y" → "X".
+            gems[0].name.split(" of ").next().unwrap_or(&gems[0].name).to_string()
+        });
+    let mut options: Vec<GemOption> = names
+        .into_iter()
+        .map(|(name, transfigured)| {
+            let mut prices: Vec<GemVariantPrice> = gems
+                .iter()
+                .filter(|g| g.name == name && !g.corrupted)
+                .map(|g| GemVariantPrice {
+                    variant: g.variant.clone(),
+                    chaos: g.chaos,
+                    listing_count: g.listing_count,
+                })
+                .collect();
+            prices.sort_by_key(|p| variant_order(&p.variant));
+            GemOption { name: name.to_string(), transfigured, prices }
+        })
+        .collect();
+    let best = |o: &GemOption| o.prices.iter().map(|p| p.chaos).fold(0.0, f64::max);
+    options.sort_by(|a, b| {
+        a.transfigured
+            .cmp(&b.transfigured)
+            .reverse()
+            .then(best(b).total_cmp(&best(a)))
+    });
+    GemFamily { base, gems: options }
+}
+
+/// "1" < "1/20" < "20" < "20/20" < "21/20": by level, then quality.
+fn variant_order(v: &str) -> (u32, u32) {
+    let mut parts = v.trim_end_matches('c').split('/');
+    let level = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+    let quality = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+    (level, quality)
 }
 
 #[derive(Deserialize)]
@@ -101,6 +189,9 @@ struct ItemLine {
     chaos_value: f64,
     listing_count: Option<u32>,
     spark_line: Option<Sparkline>,
+    /// For gems: `{"query": {"type": {"option": "<base gem>", "discriminator": …}}}`.
+    trade_filter: Option<serde_json::Value>,
+    metadata: Option<serde_json::Value>,
 }
 
 impl NinjaIndex {
@@ -116,6 +207,7 @@ impl NinjaIndex {
         let (exchange, items) = futures::join!(exchange, items);
 
         let mut by_name: HashMap<String, Vec<NinjaPrice>> = HashMap::new();
+        let mut gems_by_base: HashMap<String, Vec<GemPrice>> = HashMap::new();
         let mut divine_chaos = None;
         let mut errors = 0;
         for resp in exchange {
@@ -158,6 +250,23 @@ impl NinjaIndex {
                 continue;
             };
             for l in ov.lines {
+                if l.gem_level.is_some() {
+                    let base = l
+                        .trade_filter
+                        .as_ref()
+                        .and_then(|f| f["query"]["type"]["option"].as_str())
+                        .unwrap_or(&l.name)
+                        .to_string();
+                    let kind = l.metadata.as_ref().and_then(|m| m["gemKind"].as_str());
+                    gems_by_base.entry(base.to_lowercase()).or_default().push(GemPrice {
+                        name: l.name.clone(),
+                        transfigured: matches!(kind, Some("transfigured" | "trarthus")),
+                        variant: l.variant.clone().unwrap_or_default(),
+                        corrupted: l.corrupted.unwrap_or(false),
+                        chaos: l.chaos_value,
+                        listing_count: l.listing_count,
+                    });
+                }
                 by_name.entry(l.name.to_lowercase()).or_default().push(NinjaPrice {
                     name: l.name,
                     base_type: l.base_type,
@@ -195,7 +304,33 @@ impl NinjaIndex {
             fetched: Instant::now(),
             divine_chaos: divine_chaos.unwrap_or(0.0),
             by_name,
+            gems_by_base,
         })
+    }
+
+    /// Gem families whose base gem or one of whose transfigured gems matches `query`
+    /// (any part of the name, any case). Only bases that have transfigured gems.
+    pub fn gem_families(&self, query: &str) -> Vec<GemFamily> {
+        let q = query.trim().to_lowercase();
+        if q.len() < 2 {
+            return Vec::new();
+        }
+        let mut families: Vec<GemFamily> = self
+            .gems_by_base
+            .iter()
+            .filter(|(base, gems)| {
+                gems.iter().any(|g| g.transfigured)
+                    && (base.contains(&q) || gems.iter().any(|g| g.name.to_lowercase().contains(&q)))
+            })
+            .map(|(_, gems)| family(gems))
+            .collect();
+        // Exact and prefix matches of the base first, then by name.
+        families.sort_by_key(|f| {
+            let b = f.base.to_lowercase();
+            (b != q, !b.starts_with(&q), f.base.clone())
+        });
+        families.truncate(6);
+        families
     }
 
     /// The prices that fit this item, best match first. Empty when poe.ninja doesn't
@@ -235,5 +370,44 @@ impl NinjaIndex {
             _ => {}
         }
         prices
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn gem(name: &str, transfigured: bool, variant: &str, corrupted: bool, chaos: f64) -> GemPrice {
+        GemPrice {
+            name: name.into(),
+            transfigured,
+            variant: variant.into(),
+            corrupted,
+            chaos,
+            listing_count: None,
+        }
+    }
+
+    #[test]
+    fn orders_variants_by_level_then_quality() {
+        let mut v = vec!["20/20", "1/20", "21/20c", "1", "20"];
+        v.sort_by_key(|v| variant_order(v));
+        assert_eq!(v, vec!["1", "1/20", "20", "20/20", "21/20c"]);
+    }
+
+    #[test]
+    fn family_lists_transfigured_gems_by_value_without_corrupted_prices() {
+        let f = family(&[
+            gem("Double Strike", false, "20/20", false, 20.0),
+            gem("Double Strike of Impaling", true, "1/20", false, 5.4),
+            gem("Double Strike of Momentum", true, "1", false, 1.0),
+            gem("Double Strike of Momentum", true, "1/20", false, 15.0),
+            gem("Double Strike of Momentum", true, "21/20c", true, 300.0),
+        ]);
+        assert_eq!(f.base, "Double Strike");
+        let names: Vec<&str> = f.gems.iter().map(|g| g.name.as_str()).collect();
+        assert_eq!(names, vec!["Double Strike of Momentum", "Double Strike of Impaling", "Double Strike"]);
+        let momentum: Vec<&str> = f.gems[0].prices.iter().map(|p| p.variant.as_str()).collect();
+        assert_eq!(momentum, vec!["1", "1/20"]);
     }
 }

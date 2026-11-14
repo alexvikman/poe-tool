@@ -11,7 +11,7 @@ use audio::Ducker;
 use price::item::Item;
 use price::stats::StatFilter;
 use price::trade::{SearchOptions, TradeResult};
-use price::{League, PriceCheck, PriceService};
+use price::{GemSearch, League, PriceCheck, PriceService};
 use serde::Serialize;
 use settings::Settings;
 use std::path::PathBuf;
@@ -69,6 +69,12 @@ async fn league(state: &AppState) -> String {
 async fn price_check(state: State<'_, AppState>, text: String) -> Result<PriceCheck, String> {
     let league = league(&state).await;
     state.price.check(&text, &league).await
+}
+
+#[tauri::command]
+async fn gem_search(state: State<'_, AppState>, query: String) -> Result<GemSearch, String> {
+    let league = league(&state).await;
+    state.price.gem_search(&query, &league).await
 }
 
 #[tauri::command]
@@ -264,7 +270,8 @@ pub fn run() {
             get_status,
             get_leagues,
             price_check,
-            price_search
+            price_search,
+            gem_search
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

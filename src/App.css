@@ -808,3 +808,77 @@ select {
   margin-top: 8px;
   color: var(--text-dim);
 }
+
+/* Transfigured gem search */
+
+.gem-search {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.gem-input {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 7px 9px;
+  font: inherit;
+}
+
+.gem-input:focus {
+  outline: none;
+  border-color: var(--accent-dim);
+}
+
+.gem-family {
+  display: flex;
+  flex-direction: column;
+}
+
+.gem-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 6px 0;
+  border-top: 1px solid var(--line);
+}
+
+.gem-name {
+  color: #3cc9c1;
+}
+
+.gem-row.base .gem-name {
+  color: var(--text-dim);
+}
+
+.gem-row.best .gem-name {
+  font-weight: 600;
+}
+
+.gem-name small {
+  display: block;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.gem-prices {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  font-variant-numeric: tabular-nums;
+}
+
+.gem-price {
+  color: var(--accent);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.gem-price small {
+  display: block;
+  font-size: 10px;
+  color: var(--text-dim);
+}
