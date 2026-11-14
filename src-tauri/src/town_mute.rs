@@ -13,8 +13,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const TICK: Duration = Duration::from_millis(250);
-/// How often to look for the game process and re-apply the volume (new sessions).
+/// How often to look for the game process.
 const SLOW_TICK: Duration = Duration::from_secs(2);
+/// How often to check the game's volume, so a session the game opens while loading a
+/// zone is set right within a second.
+const AUDIO_TICK: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -121,6 +124,7 @@ impl TownMute {
     /// Runs forever on its own thread, calling `on_status` whenever the status changes.
     pub fn run(mut self, on_status: impl Fn(&Status)) {
         let mut last_slow = Instant::now() - SLOW_TICK;
+        let mut last_audio = Instant::now() - AUDIO_TICK;
         let mut last_settings = None;
         let mut last_lower = false;
         let mut last_sent: Option<Status> = None;
@@ -140,9 +144,10 @@ impl TownMute {
             self.read_log();
 
             let lower = self.tracker.should_lower(&settings) && self.game.running();
-            // Apply when something changed, and every slow tick so new audio sessions
-            // and a restarted game are covered too.
-            if slow || settings_changed || lower != last_lower {
+            // Apply at once when something changed, and every second anyway, so new
+            // audio sessions and a restarted game are covered too.
+            if last_audio.elapsed() >= AUDIO_TICK || settings_changed || lower != last_lower {
+                last_audio = Instant::now();
                 self.apply_volume(lower, &settings);
             }
             last_lower = lower;
