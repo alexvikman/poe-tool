@@ -4,6 +4,8 @@ import { PricePage } from "./PricePage";
 import { TownMutePage } from "./TownMutePage";
 import { HotkeysPage } from "./HotkeysPage";
 import { UpdateNotice } from "./UpdateNotice";
+import { UpdatesPage } from "./UpdatesPage";
+import { startUpdateChecks, useUpdates } from "./updates";
 import "./App.css";
 
 const NAV = [
@@ -11,6 +13,7 @@ const NAV = [
   { id: "builds", label: "Builds", soon: true },
   { id: "town-mute", label: "Town mute", soon: false },
   { id: "hotkeys", label: "Hotkeys", soon: false },
+  { id: "updates", label: "Updates", soon: false },
 ] as const;
 
 type Page = (typeof NAV)[number]["id"];
@@ -19,8 +22,11 @@ function App() {
   const [page, setPage] = useState<Page>("price");
   const [version, setVersion] = useState<string | null>(null);
 
+  const { update } = useUpdates();
+
   useEffect(() => {
     getVersion().then(setVersion, () => setVersion(null));
+    startUpdateChecks();
   }, []);
   return (
     <div className="shell">
@@ -35,10 +41,11 @@ function App() {
           >
             {item.label}
             {item.soon && <span className="soon">Soon</span>}
+            {item.id === "updates" && update && <span className="dot" title="Update available" />}
           </button>
         ))}
         <div className="nav-foot">
-          <UpdateNotice />
+          {page !== "updates" && <UpdateNotice onOpen={() => setPage("updates")} />}
           {version && <div className="version">v{version}</div>}
         </div>
       </nav>
@@ -46,6 +53,7 @@ function App() {
         {page === "price" && <PricePage />}
         {page === "town-mute" && <TownMutePage />}
         {page === "hotkeys" && <HotkeysPage />}
+        {page === "updates" && <UpdatesPage />}
       </main>
     </div>
   );

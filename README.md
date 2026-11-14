@@ -8,7 +8,7 @@ Status: early, but in use.
 
 [Download PoE-Tool-setup.exe](https://github.com/alexvikman/poe-tool/releases/download/nightly/PoE-Tool-setup.exe), the newest build ([release page](https://github.com/alexvikman/poe-tool/releases/tag/nightly)).
 
-Run it to install. It installs for your Windows user only, so it doesn't ask for an administrator. The installer isn't code-signed yet, so Windows SmartScreen asks the first time: choose **More info → Run anyway**. After that, PoE Tool checks for new builds itself and shows **Update available** in its menu; one click installs it and restarts.
+Run it to install. It installs for your Windows user only, so it doesn't ask for an administrator. The installer isn't code-signed yet, so Windows SmartScreen asks the first time: choose **More info → Run anyway**. After that, PoE Tool checks for new builds itself (at start, every hour, and when you open its window) and shows **Update available** in its menu; one click installs it and restarts. The **Updates** page shows your version and checks on request.
 
 ## Getting started
 

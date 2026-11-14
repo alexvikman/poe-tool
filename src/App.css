@@ -1002,3 +1002,16 @@ select {
 }
 
 .kind-property { color: var(--text); font-weight: 600; }
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.update-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
