@@ -63,3 +63,8 @@ and prints the result.
 ## Building a Windows installer
 
 On Windows: `pnpm tauri build` (NSIS installer in `src-tauri/target/release/bundle/nsis`).
+
+CI (`.github/workflows/ci.yml`) runs the Rust tests and builds the x64 installer on every
+push to `main` and every pull request. Download it from the run's **Artifacts**
+(`poe-tool-windows-x64-<run>`). The installer isn't code-signed yet, so Windows SmartScreen
+asks once: **More info → Run anyway**.
