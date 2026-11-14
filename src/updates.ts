@@ -30,7 +30,8 @@ export async function checkForUpdate(): Promise<void> {
   if (state.checking || state.progress) return;
   set({ checking: true, error: null });
   try {
-    const update = await check();
+    // Always the newest answer, never one kept along the way.
+    const update = await check({ headers: { "Cache-Control": "no-cache", Pragma: "no-cache" } });
     set({ update, lastChecked: new Date() });
   } catch (e) {
     set({ error: String(e), lastChecked: new Date() });

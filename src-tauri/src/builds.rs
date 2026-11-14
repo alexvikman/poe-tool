@@ -683,12 +683,14 @@ pub const SERVICE_KEY: Option<&str> = option_env!("POB_SERVICE_KEY");
 /// How often a busy or rate-limited service is asked again, and the longest wait.
 const SERVICE_RETRIES: usize = 2;
 const SERVICE_MAX_WAIT: Duration = Duration::from_secs(20);
+/// The wait when a 429 or 503 doesn't say (Cloudflare's own block lasts 10 seconds).
+const SERVICE_DEFAULT_WAIT: Duration = Duration::from_secs(10);
 
 /// Asks the PoB service for a build's stats. `agent` names the app and its version
 /// ("PoE-Tool/0.1.30"), as the service logs it.
 pub async fn calculate(http: &reqwest::Client, url: &str, key: &str, agent: &str, xml: &str) -> Result<Calculated, String> {
     let mut tries = 0;
-    let (status, body) = loop {
+    let resp = loop {
         let mut req = http
             .post(format!("{}/v1/calc", url.trim_end_matches('/')))
             .header(reqwest::header::USER_AGENT, agent)
@@ -699,32 +701,28 @@ pub async fn calculate(http: &reqwest::Client, url: &str, key: &str, agent: &str
             req = req.bearer_auth(key.trim());
         }
         let resp = req.send().await.map_err(|e| format!("Couldn't reach the PoB service: {e}"))?;
-        let status = resp.status();
-        // Busy (503) or too many calculations (429): it says when to come back.
-        if matches!(status.as_u16(), 429 | 503) && tries < SERVICE_RETRIES {
-            let wait = resp
-                .headers()
-                .get(reqwest::header::RETRY_AFTER)
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.trim().parse::<u64>().ok())
-                .map(Duration::from_secs)
-                .unwrap_or(Duration::from_secs(2))
-                .min(SERVICE_MAX_WAIT);
+        // Too many requests (429: the service's budget, or Cloudflare's limit in front of
+        // it) or busy (503): it says when to come back.
+        if matches!(resp.status().as_u16(), 429 | 503) && tries < SERVICE_RETRIES {
             tries += 1;
-            tokio::time::sleep(wait).await;
+            tokio::time::sleep(retry_after(resp.headers())).await;
             continue;
         }
-        let body: serde_json::Value = resp.json().await.map_err(|e| format!("The PoB service answered oddly: {e}"))?;
-        break (status, body);
+        break resp;
     };
+    let status = resp.status();
+    // Only the service answers in JSON; Cloudflare's own errors are text or a web page.
+    let is_json = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|t| t.starts_with("application/json"));
+    let body: serde_json::Value = if is_json { resp.json().await.unwrap_or_default() } else { serde_json::Value::Null };
     if !status.is_success() {
-        let msg = body["error"]["message"].as_str().unwrap_or("unknown error");
-        return Err(match status.as_u16() {
-            429 => "Path of Building is busy with too many calculations from here. Try again in a minute.".into(),
-            503 => "The PoB service is busy. Try again in a moment.".into(),
-            401 => "The PoB service didn't accept this version of PoE Tool. An update may help.".into(),
-            _ => format!("PoB couldn't calculate it: {msg}"),
-        });
+        return Err(service_error(status.as_u16(), body["error"]["message"].as_str()));
+    }
+    if !is_json {
+        return Err("The PoB service isn't available right now.".into());
     }
     let stats = body["playerStats"]
         .as_array()
@@ -733,6 +731,27 @@ pub async fn calculate(http: &reqwest::Client, url: &str, key: &str, agent: &str
         .filter_map(|s| Some((s["stat"].as_str()?.to_string(), s["value"].as_f64()?)))
         .collect();
     Ok(Calculated { stats, pob_version: body["pobVersion"].as_str().map(str::to_string) })
+}
+
+/// How long a 429 or 503 asks to wait (`Retry-After`, in seconds), within reason.
+fn retry_after(headers: &reqwest::header::HeaderMap) -> Duration {
+    headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(SERVICE_DEFAULT_WAIT)
+        .min(SERVICE_MAX_WAIT)
+}
+
+/// What to say when the service, or Cloudflare in front of it, says no.
+fn service_error(status: u16, message: Option<&str>) -> String {
+    match status {
+        429 => "Path of Building is busy with too many calculations from here. Try again in a minute.".into(),
+        401 => "The PoB service didn't accept this version of PoE Tool. An update may help.".into(),
+        400 | 413 | 422 => format!("PoB couldn't calculate it: {}", message.unwrap_or("it didn't take the build")),
+        _ => "The PoB service isn't available right now.".into(),
+    }
 }
 
 /* What the build is shown with: item pictures, gem colours, the tree's names */
@@ -1112,6 +1131,59 @@ mod tests {
             );
         }
         println!("exported: Life {:?} FullDPS {:?}", view.stats.get("Life"), view.stats.get("FullDPS"));
+    }
+
+    /// A server that gives these answers in turn, one per connection.
+    fn fake_service(answers: Vec<String>) -> String {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for answer in answers {
+                let (mut stream, _) = listener.accept().unwrap();
+                // Read the request's head and body before answering.
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut length = 0;
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = v.trim().parse().unwrap();
+                    }
+                    if line == "\r\n" {
+                        break;
+                    }
+                }
+                let mut body = vec![0; length];
+                std::io::Read::read_exact(&mut reader, &mut body).unwrap();
+                stream.write_all(answer.as_bytes()).unwrap();
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    fn answer(status: &str, content_type: &str, headers: &str, body: &str) -> String {
+        format!(
+            "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    #[tokio::test]
+    async fn waits_out_cloudflares_limit() {
+        let url = fake_service(vec![
+            answer("429 Too Many Requests", "text/plain", "Retry-After: 0\r\n", "error code: 1015"),
+            answer("200 OK", "application/json", "", r#"{"pobVersion":"2.67.2","playerStats":[{"stat":"Life","value":4809}]}"#),
+        ]);
+        let c = calculate(&reqwest::Client::new(), &url, "", "PoE-Tool/test", "<PathOfBuilding/>").await.unwrap();
+        assert_eq!(c.stats.get("Life"), Some(&4809.0));
+    }
+
+    #[tokio::test]
+    async fn says_unavailable_for_cloudflare_pages() {
+        let url = fake_service(vec![answer("502 Bad Gateway", "text/html", "", "<html>bad gateway</html>")]);
+        let e = calculate(&reqwest::Client::new(), &url, "", "PoE-Tool/test", "<PathOfBuilding/>").await.unwrap_err();
+        assert_eq!(e, "The PoB service isn't available right now.");
     }
 
     #[test]
