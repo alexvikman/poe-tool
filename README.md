@@ -1,93 +1,51 @@
 # PoE Tool
 
-A Windows desktop companion for Path of Exile 1, built with Tauri 2 (Rust) and React.
+PoE Tool sits beside Path of Exile 1 on Windows. Press a key over an item to see what it's worth, send `/hideout` with one key, and let it turn the game down in town, where other players' Goblin Troupes and noisy pets play.
 
-## Features
+Status: early, but in use.
 
-- **Price check.** Hover over an item in the game and press `Ctrl+D`: an overlay beside the
-  cursor shows the poe.ninja price (currency, cards, fragments, uniques, gems, …) and live
-  listings from the official trade site: the item search for gear and gems (transfigured
-  gems included), the currency exchange for bulk items such as currency and cards. Rares get filters from their mods, with pseudo
-  totals for life and resistances, which you can turn on and off and search again.
-  Uniques get filters for their rolled mods, with each mod's roll range. In the
-  Labyrinth's Divine Font, where the game can't copy gems, the overlay offers a search
-  instead: type the gem's name to see what each transfigured version is worth. Leagues come
-  from the trade site (cached for an hour), so a new league needs no update.
-- **Chat commands.** A hotkey types a chat command and sends it: `F5` → `/hideout` by
-  default; more under Hotkeys (`/menagerie`, `/kingsmarch`, `/exit`, … or your own text).
-- **Town mute.** Lowers the game's volume in the Windows volume mixer while you're in
-  town (and optionally in hideouts), so Goblin Troupes and other noisy pets stay quiet.
-  The volume goes back as you leave.
-- Build visualisation is planned.
+## Download
 
-### How price check stays within the Terms of Use
+[Download PoE-Tool-setup.exe](https://github.com/alexvikman/poe-tool/releases/download/nightly/PoE-Tool-setup.exe), the newest build ([release page](https://github.com/alexvikman/poe-tool/releases/tag/nightly)).
 
-One key press does one thing in the game: the hotkey sends a single Ctrl+Alt+C (the game's advanced copy), which copies
-the item under the cursor. The hotkey is registered only while
-the game window is in front, so other apps keep their Ctrl+D. Prices come from
-poe.ninja and pathofexile.com's public trade API, within the rate limits the site sends.
+Run it to install. It installs for your Windows user only, so it doesn't ask for an administrator. The installer isn't code-signed yet, so Windows SmartScreen asks the first time: choose **More info → Run anyway**. After that, PoE Tool checks for new builds itself and shows **Update available** in its menu; one click installs it and restarts.
 
-### How chat commands stay within the Terms of Use
+## Getting started
 
-One key press, one chat command: Enter opens the chat, Ctrl+A and Ctrl+V put the command
-in it (through the clipboard, which is put back a second later), Enter sends it. Like the
-price check hotkey, the keys are registered only while the game is in front.
+1. Run Path of Exile in **Windowed** or **Windowed Fullscreen** (Options › Graphics), so PoE Tool's windows can show over it.
+2. Start PoE Tool. It stays in the tray when you close its window; right-click the tray icon to quit.
+3. In the game, hover over an item and press `Ctrl+D`.
 
-### How town mute stays within the Terms of Use
+The hotkeys only work while Path of Exile is in front, so other programs keep their keys.
 
-It never touches the game: no game files are changed, no memory is read and no input is
-sent. It does two things anyone could do by hand:
+## What it does
 
-1. Reads `Client.txt`, the log the game writes next to its executable. Zone changes appear there as `Generating level … area "1_1_town"`.
-2. Changes the game's slider in the Windows volume mixer (`ISimpleAudioVolume`).
+**Price check.** `Ctrl+D` over an item opens a window beside the cursor with what it's worth: the poe.ninja price, and live listings from the official trade site with price, how long ago they were listed and the seller. Currency, divination cards and other stackable items show offers from the currency exchange, with the price for each and how many the seller has. **Trade ↗** opens the same search on pathofexile.com.
 
-Restoring is a state, not a one-off: outside town, every second, any game audio session
-still at the level the tool lowered it to is put back. The game can open a new session
-while loading a zone, and Windows gives it the app's last (lowered) volume. The game also
-changes its own volume when it is alt-tabbed, so while it is in the background the tool
-never raises the volume or takes a level as the original; it catches up within a second
-of the game coming back to the front. The volumes
-are saved to `lowered-volumes.json` in the app's config folder, so they are put back even
-after a crash.
+**Choose what to search for.** Rares list their mods, with totals for life and resistances the way the trade site counts them; uniques list their mods with the range each can roll in and where the item's roll is. Tick and untick mods, set a minimum or maximum, choose corrupted or not and instant buyout only, and the search updates by itself.
 
-## Development
+**Lab gems.** In the Labyrinth's Divine Font the game can't copy the gems, so `Ctrl+D` there opens a search instead: type the gem's name to see what each transfigured version is worth. It is also under **Lab gems** in the price window and on the Price check page.
 
-```bash
-pnpm install
-pnpm tauri dev
-```
+**Leagues.** PoE Tool follows the current league by itself and picks up a new one when it starts. You can choose another league, or type the name of a private league, on the Price check page or in the price window.
 
-Rust tests run on any OS: `cd src-tauri && cargo test`. The audio code only does
-something on Windows; elsewhere it finds no sessions.
+**Chat commands.** `F5` sends `/hideout`. Add your own under Hotkeys: `/menagerie`, `/kingsmarch`, `/delve`, `/heist`, `/exit`, `/remaining` are one click away, or type any text. Untick **Send** to leave the text in the chat box to finish yourself.
 
-### Testing town mute without the game (Windows)
+**Town mute.** Lowers the game's volume while you're in town (and in hideouts, if you want), and puts it back as you leave. Choose how quiet under Town mute; 0% is silent. It works through the Windows volume mixer and reads the game's own log to know where you are.
 
-`scripts/fake-poe.ps1` starts a stand-in `PathOfExile_x64.exe` that plays a looping sound
-and writes zone changes to its `Client.txt`:
+## Hotkeys
 
-```powershell
-.\scripts\fake-poe.ps1 start
-.\scripts\fake-poe.ps1 enter 1_1_town "Lioneye's Watch"   # volume goes down
-.\scripts\fake-poe.ps1 enter MapWorldsStrand Strand       # volume comes back
-.\scripts\fake-poe.ps1 stop
-```
+| Key | Does |
+|---|---|
+| `Ctrl+D` | Price check the item under the cursor |
+| `F5` | Send `/hideout` |
+| `Esc` | Close the price window |
 
-`cargo run --example audio_probe` lists every audio session as `pid volume`.
+Change them, and add chat commands, under Hotkeys.
 
-Its chat works like the game's (Enter opens it, Enter sends) and logs sent lines to
-`chat.log` next to its `Client.txt`, for testing chat commands. `-NoCopy` makes it copy
-nothing, like the Labyrinth's Divine Font. The fake game's window answers Ctrl+C and Ctrl+Alt+C like the game, so the price check hotkey works on it
-too: `.\scripts\fake-poe.ps1 start -ItemFile item.txt` (a rare pair of boots without
-`-ItemFile`). On any OS, `cargo run --example price_probe -- item.txt` prices an item file
-and prints the result.
+## Is it allowed?
 
-## Building a Windows installer
+PoE Tool is built to stay within Path of Exile's Terms of Use: it never changes game files, never reads the game's memory and never plays for you. One key press does one thing in the game, as when you press the keys yourself: `Ctrl+D` copies the item under the cursor, a chat command types one command. Town mute only reads the game's log file and moves the game's slider in the Windows volume mixer.
 
-On Windows: `pnpm tauri build` (NSIS installer in `src-tauri/target/release/bundle/nsis`).
+## For developers
 
-CI (`.github/workflows/ci.yml`) runs the Rust tests and builds the x64 installer on every
-push to `main` and every pull request. Each push to `main` also publishes it as the
-`nightly` pre-release, at a fixed link:
-https://github.com/alexvikman/poe-tool/releases/download/nightly/PoE-Tool-setup.exe
-Builds are numbered 0.1.<run>; the app shows its version at the bottom of the menu. The installer isn't code-signed yet, so Windows SmartScreen
-asks once: **More info → Run anyway**.
+Building from source, testing without the game and how releases are made: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).

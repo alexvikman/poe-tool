@@ -46,11 +46,33 @@ jobs:
 
       - name: Build installer
         shell: bash
-        # 0.1.<run> so an install shows which build it is.
+        env:
+          # Signs the installer for the app's own updater. Not available to pull requests
+          # from forks; those build without update signatures.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        # 0.1.<run> so an install shows which build it is and the updater sees it as newer.
         run: |
-          echo '{"version":"0.1.${{ github.run_number }}"}' > ci-version.json
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo '{"version":"0.1.${{ github.run_number }}"}' > ci-version.json
+          else
+            echo '{"version":"0.1.${{ github.run_number }}","bundle":{"createUpdaterArtifacts":false}}' > ci-version.json
+          fi
           pnpm tauri build --config ci-version.json
           cp src-tauri/target/release/bundle/nsis/*-setup.exe PoE-Tool-setup.exe
+
+      # What the app's updater reads: the newest version and where its signed installer is.
+      - name: Write the update manifest
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          sig=$(cat src-tauri/target/release/bundle/nsis/*-setup.exe.sig)
+          url="https://github.com/${{ github.repository }}/releases/download/nightly/PoE-Tool-setup.exe"
+          jq -n --arg version "0.1.${{ github.run_number }}" --arg sig "$sig" --arg url "$url" \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg notes "Built from ${GITHUB_SHA::7} on main." \
+            '{version: $version, notes: $notes, pub_date: $date,
+              platforms: {"windows-x86_64": {signature: $sig, url: $url}}}' > latest.json
+          cat latest.json
 
       - name: Upload installer
         uses: actions/upload-artifact@v7
@@ -62,10 +84,13 @@ jobs:
           if-no-files-found: error
 
       - name: Upload installer for the release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v7
         with:
           name: release-installer
-          path: PoE-Tool-setup.exe
+          path: |
+            PoE-Tool-setup.exe
+            latest.json
           if-no-files-found: error
 
   # A fixed link to the newest installer, no zip:
@@ -88,6 +113,6 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           gh release delete nightly --yes --cleanup-tag || true
-          gh release create nightly PoE-Tool-setup.exe --prerelease --target "$GITHUB_SHA" \
+          gh release create nightly PoE-Tool-setup.exe latest.json --prerelease --target "$GITHUB_SHA" \
             --title "Latest build (0.1.${{ github.run_number }})" \
-            --notes "Built from ${GITHUB_SHA::7} on main. Download PoE-Tool-setup.exe and run it; it updates an existing install."
+            --notes "Built from ${GITHUB_SHA::7} on main. Download PoE-Tool-setup.exe and run it; installed apps update themselves."

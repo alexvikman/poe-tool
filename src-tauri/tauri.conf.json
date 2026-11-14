@@ -49,6 +49,18 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEVDNTMxMzY5MDM1RDFFOEMKUldTTUhsMERhUk5UN0h4S3cvVTZZZDF6Z3R5WTJ2ZGQvdTZaU1gvOXdwYlovZDlKSmNZV2xVWHgK",
+      "endpoints": [
+        "https://github.com/alexvikman/poe-tool/releases/download/nightly/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

@@ -952,9 +952,33 @@ select {
   align-items: flex-start;
 }
 
-.version {
+.nav-foot {
   margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.version {
   padding: 0 10px;
   font-size: 11px;
+  color: var(--text-dim);
+}
+
+.update {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--accent-dim);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+}
+
+.update-title {
+  color: var(--accent);
+}
+
+.update small {
   color: var(--text-dim);
 }

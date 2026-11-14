@@ -3,6 +3,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { PricePage } from "./PricePage";
 import { TownMutePage } from "./TownMutePage";
 import { HotkeysPage } from "./HotkeysPage";
+import { UpdateNotice } from "./UpdateNotice";
 import "./App.css";
 
 const NAV = [
@@ -36,7 +37,10 @@ function App() {
             {item.soon && <span className="soon">Soon</span>}
           </button>
         ))}
-        {version && <div className="version">v{version}</div>}
+        <div className="nav-foot">
+          <UpdateNotice />
+          {version && <div className="version">v{version}</div>}
+        </div>
       </nav>
       <main className="main">
         {page === "price" && <PricePage />}

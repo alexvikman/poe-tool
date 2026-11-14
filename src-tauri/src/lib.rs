@@ -64,6 +64,13 @@ fn set_settings(state: State<AppState>, settings: Settings) -> Result<(), String
     Ok(())
 }
 
+/// Called right before installing an update, which closes the app without the usual
+/// exit: put the game's volume back first.
+#[tauri::command]
+fn prepare_update(state: State<AppState>) {
+    let _ = state.ducker.lock().unwrap().restore(true);
+}
+
 #[tauri::command]
 fn get_status(state: State<AppState>) -> Status {
     state.status.lock().unwrap().clone()
@@ -224,6 +231,8 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             let cache_dir = app.path().app_cache_dir()?;
@@ -310,6 +319,7 @@ pub fn run() {
             get_settings,
             set_settings,
             get_status,
+            prepare_update,
             get_leagues,
             price_check,
             price_search,
