@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { buildView, calcLoadout, importBuild, removeBuild, type BuildView, type GearItem, type GemGroup, type Loadout } from "./builds";
+import { buildView, calcLoadout, importBuild, removeBuild, type BuildView, type GearItem, type Gem, type GemGroup, type Loadout } from "./builds";
 import { getSettings, setSettings, type Settings } from "./townMute";
 import { listGroups, type HitItem, type SearchGroup } from "./searches";
-import { ItemPicture, ItemTooltip } from "./ItemView";
+import { HoverCard, ItemPicture, ItemTooltip } from "./ItemView";
 
 function remembered(): string | null {
   try {
@@ -21,7 +21,7 @@ function remember(id: string) {
   }
 }
 
-/** Builds from Path of Building, shown like pobb.in shows them. A build is the same
+/** Builds from Path of Building: stats, gear, gems and tree. A build is the same
  *  build as in Searches: its searches belong to it. */
 export function BuildsPage({ onOpenSearches }: { onOpenSearches: (groupId: string) => void }) {
   const [groups, setGroups] = useState<SearchGroup[]>([]);
@@ -413,7 +413,7 @@ function PobServiceSettings({ onSaved }: { onSaved: () => void }) {
   );
 }
 
-/* Stats, as pobb.in lists them */
+/* Stats */
 
 const num = (n: number, digits = 0) =>
   n.toLocaleString("en-US", { maximumFractionDigits: digits, minimumFractionDigits: 0 });
@@ -439,7 +439,7 @@ function BuildStats({ stats, view, config }: { stats: Record<string, number>; vi
       <div>
         {stat(
           "Life",
-          // With life reserved (low life), what's left, as pobb.in shows it.
+          // With life reserved (low life), what's left.
           s.LifeUnreserved != null && s.LifeUnreserved < (s.Life ?? 0) ? (
             <>
               {num(s.LifeUnreserved)} <span className="muted">(of {num(s.Life)})</span>
@@ -519,7 +519,7 @@ function Gear({ gear, jewels }: { gear: GearItem[]; jewels: GearItem[] }) {
           <div key={area} className="inv-slot" style={{ gridArea: area }} />
         ))}
         {main.map((g) => (
-          <GearSlot key={g.slot} item={g.item} area={SLOT_AREA[g.slot]} right={g.slot === "Weapon 2" || g.slot === "Boots" || g.slot === "Ring 2"} />
+          <GearSlot key={g.slot} item={g.item} area={SLOT_AREA[g.slot]} />
         ))}
       </div>
       {flasks.length > 0 && (
@@ -546,20 +546,27 @@ function Gear({ gear, jewels }: { gear: GearItem[]; jewels: GearItem[] }) {
   );
 }
 
-/** An item in its slot; hovering shows its tooltip. */
-function GearSlot({ item, area, right }: { item: HitItem; area?: string; right?: boolean }) {
+/** An item in its slot; hovering shows its sockets and tooltip, as in the game. */
+function GearSlot({ item, area }: { item: HitItem; area?: string }) {
+  const [hover, setHover] = useState(false);
   return (
-    <div className={`gear-slot ${area ? "" : "loose"}`} style={area ? { gridArea: area } : undefined}>
-      {item.icon ? (
-        <ItemPicture item={item} />
-      ) : (
-        <div className={`gear-noicon rarity-${item.rarity}`} style={{ width: item.width * 47.4645, height: item.height * 47.4645 }}>
-          {item.typeLine}
-        </div>
-      )}
-      <div className={`gear-pop ${right ? "left" : ""}`}>
-        <ItemTooltip item={item} />
-      </div>
+    <div onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} style={area ? { gridArea: area } : undefined} className="gear-cell">
+      <HoverCard
+        className={`gear-slot ${area ? "" : "loose"}`}
+        card={
+          <div className="gear-pop">
+            <ItemTooltip item={item} />
+          </div>
+        }
+      >
+        {item.icon ? (
+          <ItemPicture item={item} sockets={hover} />
+        ) : (
+          <div className={`gear-noicon rarity-${item.rarity}`} style={{ width: item.width * 47.4645, height: item.height * 47.4645 }}>
+            {item.typeLine}
+          </div>
+        )}
+      </HoverCard>
     </div>
   );
 }
@@ -591,25 +598,90 @@ function SetPick({
 function GemGroupCard({ group }: { group: GemGroup }) {
   const actives = group.gems.filter((g) => !g.support);
   const supports = group.gems.filter((g) => g.support);
+  const label = group.label ?? (group.source ? `From ${group.source}` : "");
   return (
     <div className={`gem-group ${group.main ? "main" : ""} ${group.enabled ? "" : "off"}`}>
-      {(group.label || group.slot) && (
+      {(label || group.slot) && (
         <div className="gem-group-head muted small">
-          <span>{group.label ?? ""}</span>
+          <span>{label}</span>
           {group.slot && <SlotIcon slot={group.slot} />}
         </div>
       )}
       {actives.map((g, i) => (
-        <div key={`a${i}`} className={`gem gem-${g.colour ?? "white"} ${g.enabled ? "" : "off"}`}>
-          {g.name} <span className="gem-lvl">{g.level}/{g.quality}</span>
-        </div>
+        <GemLine key={`a${i}`} gem={g} />
       ))}
       {supports.map((g, i) => (
-        <div key={`s${i}`} className={`gem support gem-${g.colour ?? "white"} ${g.enabled ? "" : "off"}`}>
-          <span className="gem-branch">{i === supports.length - 1 ? "└" : "├"}</span>
-          {g.name} <span className="gem-lvl">{g.level}/{g.quality}</span>
-        </div>
+        <GemLine key={`s${i}`} gem={g} branch={i === supports.length - 1 ? "└" : "├"} />
       ))}
+    </div>
+  );
+}
+
+/** A gem in its group; hovering shows what the wiki says, Ctrl+Click opens its page. */
+function GemLine({ gem, branch }: { gem: Gem; branch?: string }) {
+  const line = (
+    <>
+      {branch && <span className="gem-branch">{branch}</span>}
+      {gem.name} <span className="gem-lvl">{gem.level}/{gem.quality}</span>
+    </>
+  );
+  const className = `gem ${branch ? "support" : ""} gem-${gem.colour ?? "white"} ${gem.enabled ? "" : "off"}`;
+  const info = gem.info;
+  if (!info) return <div className={className}>{line}</div>;
+  return (
+    <HoverCard
+      className={className}
+      onClick={(e) => {
+        if (e.ctrlKey || e.metaKey) void openUrl(info.wiki);
+      }}
+      card={<GemTooltip gem={gem} />}
+    >
+      {line}
+    </HoverCard>
+  );
+}
+
+function GemTooltip({ gem }: { gem: Gem }) {
+  const info = gem.info!;
+  return (
+    <div className="gem-tip">
+      <div className="gem-tip-head">
+        {info.icon && <img src={info.icon} alt="" />}
+        <div>
+          <div className={`gem-tip-name gem-${gem.colour ?? "white"}`}>{gem.name}</div>
+          <div className="gem-tip-level">
+            Level: {gem.level}
+            {gem.quality > 0 && <> · Quality: +{gem.quality}%</>}
+          </div>
+        </div>
+      </div>
+      {info.requiredLevel != null && (
+        <div className="gem-tip-row">
+          <span className="muted">Minimum Level</span>
+          <span>{info.requiredLevel}</span>
+        </div>
+      )}
+      {info.rewards.length > 0 && (
+        <table className="gem-tip-rewards">
+          <thead>
+            <tr>
+              <th>Act</th>
+              <th>NPC</th>
+              <th>Quest</th>
+            </tr>
+          </thead>
+          <tbody>
+            {info.rewards.map((r, i) => (
+              <tr key={i}>
+                <td>{r.act}</td>
+                <td>{r.npc ?? <span className="gem-tip-reward">Quest reward</span>}</td>
+                <td>{r.quest}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <div className="gem-tip-foot muted">Wiki: Ctrl+Click</div>
     </div>
   );
 }

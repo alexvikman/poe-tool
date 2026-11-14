@@ -1,7 +1,69 @@
 // An item as the game and the trade site show it: its picture with sockets and links,
 // and its tooltip. Shared by Searches (listings) and Builds (gear).
 
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import type { HitItem, HitMod, HitProperty, SearchSort } from "./searches";
+
+/** Shows `card` beside what's hovered, on top of the page: to its right, or its left
+ *  where the right has no room, and kept inside the window. */
+export function HoverCard({
+  card,
+  children,
+  className,
+  style,
+  onClick,
+}: {
+  card: ReactNode;
+  children: ReactNode;
+  className?: string;
+  style?: React.CSSProperties;
+  onClick?: (e: React.MouseEvent) => void;
+}) {
+  const [anchor, setAnchor] = useState<DOMRect | null>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [at, setAt] = useState<{ left: number; top: number } | null>(null);
+
+  useLayoutEffect(() => {
+    const el = cardRef.current;
+    if (!anchor || !el) {
+      setAt(null);
+      return;
+    }
+    const gap = 8;
+    const margin = 8;
+    const { width, height } = el.getBoundingClientRect();
+    const roomRight = window.innerWidth - anchor.right - gap - margin;
+    let left = roomRight >= width ? anchor.right + gap : anchor.left - gap - width;
+    left = Math.max(margin, Math.min(left, window.innerWidth - width - margin));
+    let top = Math.min(anchor.top, window.innerHeight - height - margin);
+    top = Math.max(margin, top);
+    setAt({ left, top });
+  }, [anchor]);
+
+  return (
+    <div
+      className={className}
+      style={style}
+      onClick={onClick}
+      onMouseEnter={(e) => setAnchor(e.currentTarget.getBoundingClientRect())}
+      onMouseLeave={() => setAnchor(null)}
+    >
+      {children}
+      {anchor &&
+        createPortal(
+          <div
+            ref={cardRef}
+            className="hover-card"
+            style={at ? { left: at.left, top: at.top } : { left: 0, top: 0, visibility: "hidden" }}
+          >
+            {card}
+          </div>,
+          document.body,
+        )}
+    </div>
+  );
+}
 
 /** Sorting by a clicked value, where the results can be sorted (an ordinary search). */
 export interface Sorting {
@@ -186,11 +248,12 @@ const LINK_LONG = 38;
 const LINK_SHORT = 15;
 
 /** The item's picture with its sockets and links on it, as on the trade site. */
-export function ItemPicture({ item }: { item: HitItem }) {
+/** `sockets` false leaves them off, as the game does until the item's hovered. */
+export function ItemPicture({ item, sockets = true }: { item: HitItem; sockets?: boolean }) {
   return (
     <div className="item-picture" style={{ width: item.width * CELL, height: item.height * CELL }}>
       {item.icon && <img src={item.icon} alt="" loading="lazy" />}
-      {item.sockets && <Sockets sockets={item.sockets} width={item.width} />}
+      {sockets && item.sockets && <Sockets sockets={item.sockets} width={item.width} />}
     </div>
   );
 }

@@ -1,5 +1,5 @@
 //! Builds from Path of Building: imported from a pobb.in link, pastebin, poe.ninja or a
-//! PoB code, and shown like pobb.in shows them. PoB's export carries the stats PoB
+//! PoB code, and shown as a page: stats, gear, gems and tree. PoB's export carries the stats PoB
 //! calculated (DPS, life, resistances…), so showing a build needs no PoB here.
 //!
 //! A build belongs to a build in Searches (`SearchGroup`), so its searches and its PoB
@@ -9,7 +9,7 @@ use crate::live::{HitItem, HitMod, HitProperty, HitRequirement};
 use crate::price::PriceService;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -191,6 +191,8 @@ pub struct GemGroup {
     pub enabled: bool,
     /// The build's main skill is in this group.
     pub main: bool,
+    /// The item that grants the group's skill, when an item does.
+    pub source: Option<String>,
     pub gems: Vec<Gem>,
 }
 
@@ -204,8 +206,30 @@ pub struct Gem {
     pub support: bool,
     /// red, green, blue or white, from the gem's attribute.
     pub colour: Option<&'static str>,
+    /// What the wiki says of the gem; none for skills items grant.
+    pub info: Option<GemInfo>,
     #[serde(skip)]
     variant_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GemInfo {
+    pub icon: Option<String>,
+    pub required_level: Option<u32>,
+    /// The gem's wiki page.
+    pub wiki: String,
+    /// Where the build's class gets it in the campaign.
+    pub rewards: Vec<GemReward>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GemReward {
+    pub act: u32,
+    /// Who sells it; none for a quest's reward.
+    pub npc: Option<String>,
+    pub quest: String,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -258,11 +282,19 @@ pub fn parse(xml: &str) -> Result<BuildView, String> {
     }
 
     let items = child("Items");
-    let item_texts: HashMap<&str, &str> = items
+    let item_texts: ItemTexts = items
         .iter()
         .flat_map(|i| i.children())
         .filter(|n| n.has_tag_name("Item"))
-        .filter_map(|n| Some((n.attribute("id")?, n.text()?)))
+        .filter_map(|n| {
+            // PoB's rolls for mods given as ranges: <ModRange id="3" range="0.5"/>.
+            let ranges = n
+                .children()
+                .filter(|c| c.has_tag_name("ModRange"))
+                .filter_map(|c| Some((c.attribute("id")?.parse().ok()?, c.attribute("range")?.parse().ok()?)))
+                .collect();
+            Some((n.attribute("id")?, (n.text()?, ranges)))
+        })
         .collect();
 
     if let Some(items) = items {
@@ -394,9 +426,17 @@ fn read_skills(set: &roxmltree::Node, main_group: Option<usize>) -> Vec<GemGroup
             slot: s.attribute("slot").map(str::to_string),
             enabled: s.attribute("enabled") != Some("false"),
             main: main_group == Some(i + 1),
+            // "Item:70:Lvl 68-96 - The Yielding Mortality, Imperial Staff"
+            source: s
+                .attribute("source")
+                .and_then(|src| src.strip_prefix("Item:"))
+                .and_then(|src| src.split_once(':'))
+                .map(|(_, name)| name.to_string()),
             gems: s
                 .children()
                 .filter(|n| n.has_tag_name("Gem"))
+                // Skills PoB adds itself ("EnemyExplode") have no name and aren't shown.
+                .filter(|g| g.attribute("nameSpec") != Some(""))
                 .map(|g| {
                     let skill_id = g.attribute("skillId").unwrap_or_default();
                     let gem_id = g.attribute("gemId").unwrap_or_default();
@@ -407,6 +447,7 @@ fn read_skills(set: &roxmltree::Node, main_group: Option<usize>) -> Vec<GemGroup
                         enabled: g.attribute("enabled") != Some("false"),
                         support: skill_id.starts_with("Support") || gem_id.contains("/SupportGem"),
                         colour: None,
+                        info: None,
                         variant_id: g.attribute("variantId").unwrap_or(skill_id).to_string(),
                     }
                 })
@@ -431,16 +472,19 @@ fn main_skill(set: &roxmltree::Node, main_group: usize) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Each item's text and its mods' rolls (by mod line, from 1), by PoB's item id.
+type ItemTexts<'a> = HashMap<&'a str, (&'a str, HashMap<usize, f64>)>;
+
 /// An item set's equipped items, in PoB's slots.
-fn read_gear(set: &roxmltree::Node, texts: &HashMap<&str, &str>) -> Vec<GearItem> {
+fn read_gear(set: &roxmltree::Node, texts: &ItemTexts) -> Vec<GearItem> {
     let mut gear = Vec::new();
     for slot in set.children().filter(|n| n.has_tag_name("Slot")) {
         let (Some(name), Some(id)) = (slot.attribute("name"), slot.attribute("itemId")) else { continue };
         if id == "0" || name.contains("Swap") || name.contains("Abyssal Socket") {
             continue;
         }
-        if let Some(text) = texts.get(id) {
-            gear.push(GearItem { slot: name.to_string(), item: read_pob_item(text) });
+        if let Some((text, ranges)) = texts.get(id) {
+            gear.push(GearItem { slot: name.to_string(), item: read_pob_item(text, ranges) });
         }
     }
     gear
@@ -449,7 +493,9 @@ fn read_gear(set: &roxmltree::Node, texts: &HashMap<&str, &str>) -> Vec<GearItem
 /// An item as PoB writes it: "Rarity: RARE", name, base, then "Key: value" lines up to
 /// "Implicits: N", then N implicit mods and the explicit ones, with tags such as
 /// {crafted} in front.
-pub fn read_pob_item(text: &str) -> HitItem {
+/// `ranges` are PoB's rolls for mods written as ranges, by mod line (from 1); a
+/// `{range:…}` tag on the line wins, and an unrolled one sits in the middle, as in PoB.
+pub fn read_pob_item(text: &str, ranges: &HashMap<usize, f64>) -> HitItem {
     let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
     let mut item = HitItem { width: 1, height: 1, rarity: "normal", ..Default::default() };
     let mut i = 0;
@@ -525,6 +571,13 @@ pub fn read_pob_item(text: &str) -> HitItem {
         }
         let (tags, text) = split_tags(line);
         n += 1;
+        let roll = tags
+            .iter()
+            .find_map(|t| t.strip_prefix("range:")?.parse::<f64>().ok())
+            .or_else(|| ranges.get(&n).copied())
+            .unwrap_or(0.5);
+        let (text, range) = apply_range(text, roll);
+        let text = text.as_str();
         let implicit = n <= implicits;
         let variants = tags.iter().find_map(|t| t.strip_prefix("variant:"));
         if variants.is_some_and(|v| !selected_variant.as_deref().is_some_and(|s| v.split(',').any(|x| x == s))) {
@@ -546,9 +599,45 @@ pub fn read_pob_item(text: &str) -> HitItem {
         } else {
             "explicit"
         };
-        item.mods.push(HitMod { text: text.to_string(), kind, range: None, sort: None });
+        item.mods.push(HitMod { text: text.to_string(), kind, range, sort: None });
     }
     item
+}
+
+/// "(100-150)% increased Evasion" at roll 0.5 → ("125% increased Evasion",
+/// Some("100–150")), as PoB rolls a unique's ranges: min + (max − min) × roll, rounded
+/// to the range's decimals.
+fn apply_range(text: &str, roll: f64) -> (String, Option<String>) {
+    let mut out = String::with_capacity(text.len());
+    let mut ranges = Vec::new();
+    let mut rest = text;
+    while let Some(open) = rest.find('(') {
+        let Some(close) = rest[open..].find(')').map(|c| open + c) else { break };
+        let inner = &rest[open + 1..close];
+        // "a-b", where either may be negative or have decimals: split at a '-' that
+        // follows a digit.
+        let split = inner
+            .char_indices()
+            .skip(1)
+            .find(|(i, c)| *c == '-' && inner[..*i].ends_with(|p: char| p.is_ascii_digit()))
+            .map(|(i, _)| i);
+        let parsed = split.and_then(|i| Some((inner[..i].parse::<f64>().ok()?, inner[i + 1..].parse::<f64>().ok()?)));
+        out.push_str(&rest[..open]);
+        match parsed {
+            Some((min, max)) => {
+                let decimals = inner.split('-').filter_map(|p| p.split('.').nth(1)).map(str::len).max().unwrap_or(0);
+                let value = min + (max - min) * roll.clamp(0.0, 1.0);
+                let factor = 10f64.powi(decimals as i32);
+                let value = (value * factor + 0.5).floor() / factor;
+                out.push_str(&format!("{value:.decimals$}"));
+                ranges.push(format!("{}–{}", &inner[..split.unwrap()], &inner[split.unwrap() + 1..]));
+            }
+            None => out.push_str(&rest[open..=close]),
+        }
+        rest = &rest[close + 1..];
+    }
+    out.push_str(rest);
+    (out, (!ranges.is_empty()).then(|| ranges.join(", ")))
 }
 
 fn prop(label: &str, value: &str, sort: Option<&'static str>) -> HitProperty {
@@ -568,7 +657,7 @@ fn split_tags(line: &str) -> (Vec<&str>, &str) {
 }
 
 /// A passive tree (PoB's "Spec"): its nodes, chosen masteries and jewels.
-fn read_spec(spec: &roxmltree::Node, texts: &HashMap<&str, &str>) -> TreeView {
+fn read_spec(spec: &roxmltree::Node, texts: &ItemTexts) -> TreeView {
     let nodes = spec
         .attribute("nodes")
         .unwrap_or_default()
@@ -589,7 +678,7 @@ fn read_spec(spec: &roxmltree::Node, texts: &HashMap<&str, &str>) -> TreeView {
         .descendants()
         .filter(|n| n.has_tag_name("Socket"))
         .filter_map(|s| texts.get(s.attribute("itemId").filter(|id| *id != "0")?))
-        .map(|text| GearItem { slot: "Jewel".into(), item: read_pob_item(text) })
+        .map(|(text, ranges)| GearItem { slot: "Jewel".into(), item: read_pob_item(text, ranges) })
         .collect();
     TreeView {
         title: title_of(spec),
@@ -601,7 +690,7 @@ fn read_spec(spec: &roxmltree::Node, texts: &HashMap<&str, &str>) -> TreeView {
     }
 }
 
-/// A config set's summary, as pobb.in gives it.
+/// A config set's summary: the settings that change the numbers most.
 fn read_config(set: &roxmltree::Node) -> Vec<String> {
     let inputs: HashMap<&str, roxmltree::Node> = set
         .children()
@@ -768,11 +857,29 @@ struct Assets {
     uniques: HashMap<String, String>,
     /// Base type → picture.
     bases: HashMap<String, String>,
-    /// Longest first, to find the base in a magic item's name.
+    /// Every base type, longest first, to find the base in a magic item's name.
     base_names: Vec<String>,
+    /// Every unique's name, longest first, to find it in a name PoB users wrote
+    /// themselves ("Lvl 96, The Stampede").
+    unique_names: Vec<String>,
     /// Gem variant id → colour.
     gem_colours: HashMap<String, &'static str>,
+    /// The wiki's gems, by page name ("Melee Physical Damage Support").
+    gems: HashMap<String, WikiGem>,
     tree: TreeIndex,
+}
+
+#[derive(Default)]
+struct WikiGem {
+    icon: Option<String>,
+    required_level: Option<u32>,
+    rewards: Vec<WikiReward>,
+}
+
+struct WikiReward {
+    reward: GemReward,
+    /// The classes it's for; none for all.
+    classes: Option<Vec<String>>,
 }
 
 #[derive(Default)]
@@ -793,6 +900,7 @@ struct TreeNode {
 const WEEK: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 const NINJA: &str = "https://poe.ninja/poe1/api/economy/stash/current/item/overview?league=Standard&type=";
 const GEMS: &str = "https://raw.githubusercontent.com/PathOfBuildingCommunity/PathOfBuilding/master/src/Data/Gems.lua";
+const WIKI: &str = "https://www.poewiki.net";
 const TREE: &str = "https://raw.githubusercontent.com/grindinggear/skilltree-export/master/data.json";
 
 impl BuildAssets {
@@ -813,20 +921,50 @@ impl BuildAssets {
         let jewels = view.trees.iter_mut().flat_map(|t| t.jewels.iter_mut());
         for g in gear.chain(jewels) {
             let item = &mut g.item;
-            let icon = if item.rarity == "unique" || item.rarity == "relic" {
-                a.uniques.get(&item.name).or_else(|| a.bases.get(&item.type_line))
-            } else if item.rarity == "magic" {
-                a.base_names.iter().find(|b| item.type_line.contains(b.as_str())).and_then(|b| a.bases.get(b))
+            let found = |names: &[String], text: &str| names.iter().find(|n| text.contains(n.as_str())).cloned();
+            let base = if a.bases.contains_key(&item.type_line) {
+                Some(item.type_line.clone())
             } else {
-                a.bases.get(&item.type_line)
+                found(&a.base_names, &item.type_line)
             };
-            item.icon = icon.cloned();
+            let unique = if item.rarity == "unique" || item.rarity == "relic" {
+                if a.uniques.contains_key(&item.name) {
+                    Some(item.name.clone())
+                } else {
+                    found(&a.unique_names, &item.name)
+                }
+            } else {
+                None
+            };
+            if let Some(name) = &unique {
+                item.name = name.clone();
+            }
+            // poe.ninja's picture first (it says the size); the wiki has every other.
+            let icon = match (&unique, &base) {
+                (Some(u), _) if a.uniques.contains_key(u) => a.uniques.get(u).cloned(),
+                (Some(u), _) => Some(wiki_icon(u)),
+                (None, Some(b)) => Some(a.bases.get(b).cloned().unwrap_or_else(|| wiki_icon(b))),
+                (None, None) => None,
+            };
+            item.icon = icon;
             let (w, h) = item.icon.as_deref().and_then(icon_size).unwrap_or_else(|| slot_size(&g.slot));
             item.width = w;
             item.height = h;
         }
-        for gem in view.skill_sets.iter_mut().flat_map(|s| s.groups.iter_mut()).flat_map(|g| g.gems.iter_mut()) {
-            gem.colour = a.gem_colours.get(&gem.variant_id).copied();
+        let class = view.class.clone();
+        for group in view.skill_sets.iter_mut().flat_map(|s| s.groups.iter_mut()) {
+            if let Some(source) = &mut group.source
+                && let Some(u) = a.unique_names.iter().find(|u| source.contains(u.as_str()))
+            {
+                *source = u.clone();
+            }
+            let granted = group.source.is_some();
+            for gem in &mut group.gems {
+                gem.colour = a.gem_colours.get(&gem.variant_id).copied();
+                if !granted {
+                    gem.info = gem_info(&a.gems, gem, &class);
+                }
+            }
         }
         for t in &mut view.trees {
             for id in &t.nodes {
@@ -857,6 +995,107 @@ impl BuildAssets {
     }
 }
 
+/// The wiki's page for a gem, its level and where `class` gets it.
+fn gem_info(gems: &HashMap<String, WikiGem>, gem: &Gem, class: &str) -> Option<GemInfo> {
+    let page = if gem.support && !gem.name.ends_with(" Support") { format!("{} Support", gem.name) } else { gem.name.clone() };
+    let w = gems.get(&page)?;
+    let mut rewards: Vec<GemReward> = w
+        .rewards
+        .iter()
+        .filter(|r| r.classes.as_ref().is_none_or(|c| c.iter().any(|c| c == class)))
+        .map(|r| r.reward.clone())
+        .collect();
+    rewards.sort_by_key(|r| (r.act, r.npc.is_some()));
+    rewards.dedup_by(|a, b| a.act == b.act && a.npc == b.npc && a.quest == b.quest);
+    Some(GemInfo { icon: w.icon.clone(), required_level: w.required_level, wiki: wiki_page(&page), rewards })
+}
+
+const CARGO_PAGE: usize = 500;
+
+/// The wiki's gems with their levels, pictures and campaign rewards, from its Cargo
+/// tables a page of 500 rows at a time.
+async fn load_wiki_gems(price: &PriceService) -> HashMap<String, WikiGem> {
+    let mut gems: HashMap<String, WikiGem> = HashMap::new();
+    let rows = |table: &'static str, fields: &'static str, filter: &'static str, pages: usize| async move {
+        let mut out = Vec::new();
+        for page in 0..pages {
+            let url = format!(
+                "{WIKI}/w/api.php?action=cargoquery&format=json&tables={table}&fields={}&where={}&order_by={}&limit={CARGO_PAGE}&offset={}",
+                encode(fields),
+                encode(filter),
+                encode(&format!("{table}._pageName")),
+                page * CARGO_PAGE
+            );
+            let Ok(bytes) = price.cached_url(&format!("wiki-{table}-{page}.json"), &url, WEEK).await else { break };
+            let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) else { break };
+            let got: Vec<serde_json::Value> = v["cargoquery"].as_array().into_iter().flatten().map(|r| r["title"].clone()).collect();
+            let done = got.len() < CARGO_PAGE;
+            out.extend(got);
+            if done {
+                break;
+            }
+        }
+        out
+    };
+    let text = |v: &serde_json::Value| v.as_str().map(unescape).filter(|s| !s.is_empty());
+    let items = rows(
+        "items",
+        "items.name=name,items.required_level=level,items.inventory_icon=icon",
+        "items.class_id IN ('Active Skill Gem','Support Skill Gem')",
+        4,
+    )
+    .await;
+    for r in items {
+        let Some(name) = text(&r["name"]) else { continue };
+        gems.entry(name).or_insert_with(|| WikiGem {
+            icon: text(&r["icon"]).map(|f| wiki_file(f.trim_start_matches("File:"))),
+            required_level: text(&r["level"]).and_then(|l| l.parse().ok()),
+            rewards: Vec::new(),
+        });
+    }
+    let vendor = rows(
+        "vendor_rewards",
+        "vendor_rewards._pageName=item,vendor_rewards.act=act,vendor_rewards.npc=npc,vendor_rewards.quest=quest,vendor_rewards.classes__full=classes",
+        "vendor_rewards.act>0",
+        6,
+    );
+    let quest = rows(
+        "quest_rewards",
+        "quest_rewards._pageName=item,quest_rewards.act=act,quest_rewards.quest=quest,quest_rewards.classes__full=classes",
+        "quest_rewards.act>0",
+        4,
+    );
+    for (r, sold) in vendor.await.into_iter().map(|r| (r, true)).chain(quest.await.into_iter().map(|r| (r, false))) {
+        let (Some(item), Some(act), Some(quest)) = (text(&r["item"]), text(&r["act"]).and_then(|a| a.parse().ok()), text(&r["quest"])) else { continue };
+        let Some(gem) = gems.get_mut(&item) else { continue };
+        let npc = if sold { text(&r["npc"]) } else { None };
+        let classes = text(&r["classes"]).map(|c| c.split(',').map(|c| c.trim().to_string()).collect());
+        gem.rewards.push(WikiReward { reward: GemReward { act, npc, quest }, classes });
+    }
+    gems
+}
+
+/// The few entities the wiki's API writes in names: "General&#039;s Cry".
+fn unescape(s: &str) -> String {
+    s.replace("&#039;", "'").replace("&quot;", "\"").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+}
+
+/// Percent-encodes all but letters, digits and -_.
+fn encode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-' | b'.' => out.push(b as char),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+fn wiki_page(page: &str) -> String {
+    format!("{WIKI}/wiki/{}", encode(&page.replace(' ', "_")))
+}
+
 async fn load_assets(price: &PriceService) -> Assets {
     let mut a = Assets::default();
     let json = |bytes: Result<Vec<u8>, String>| bytes.ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
@@ -885,14 +1124,36 @@ async fn load_assets(price: &PriceService) -> Assets {
             }
         }
     }
-    a.base_names = a.bases.keys().cloned().collect();
+    // The trade site's list has every base and unique, also those poe.ninja hasn't seen.
+    let mut bases: HashSet<String> = a.bases.keys().cloned().collect();
+    let mut uniques: HashSet<String> = a.uniques.keys().cloned().collect();
+    if let Ok(groups) = price.trade_data("items").await {
+        let gear = ["accessory", "armour", "flask", "jewel", "weapon", "graft", "tincture"];
+        for g in groups.as_array().into_iter().flatten().filter(|g| gear.contains(&g["id"].as_str().unwrap_or(""))) {
+            for e in g["entries"].as_array().into_iter().flatten() {
+                match (e["name"].as_str(), e["type"].as_str()) {
+                    (Some(name), _) if e["flags"]["unique"].as_bool() == Some(true) => {
+                        uniques.insert(name.to_string());
+                    }
+                    (None, Some(base)) => {
+                        bases.insert(base.to_string());
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    a.base_names = bases.into_iter().collect();
     a.base_names.sort_by_key(|b| std::cmp::Reverse(b.len()));
+    a.unique_names = uniques.into_iter().collect();
+    a.unique_names.sort_by_key(|u| std::cmp::Reverse(u.len()));
     if let Ok(bytes) = price.cached_url("pob-gems.lua", GEMS, WEEK).await {
         a.gem_colours = gem_colours(&String::from_utf8_lossy(&bytes));
     }
     if let Some(v) = json(price.cached_url("passive-tree.json", TREE, WEEK).await) {
         a.tree = tree_index(&v);
     }
+    a.gems = load_wiki_gems(price).await;
     a
 }
 
@@ -950,6 +1211,21 @@ fn tree_index(v: &serde_json::Value) -> TreeIndex {
     TreeIndex { nodes }
 }
 
+/// The wiki's inventory picture of a base or unique: "Divine Life Flask" →
+/// …/images/2/2e/Divine_Life_Flask_inventory_icon.png.
+fn wiki_icon(name: &str) -> String {
+    wiki_file(&format!("{}_inventory_icon.png", name.replace(' ', "_")))
+}
+
+/// A file's address on the wiki, where MediaWiki keeps it: under the first one and
+/// two hex digits of the MD5 of its name. The wiki's pages, Special:FilePath too,
+/// ask browsers to prove they aren't bots; its files don't.
+fn wiki_file(file: &str) -> String {
+    let file = file.replace(' ', "_");
+    let hash = format!("{:x}", md5::compute(file.as_bytes()));
+    format!("{WIKI}/images/{}/{}/{}", &hash[..1], &hash[..2], encode(&file))
+}
+
 /// An item picture's size in cells, from the picture's address: the part after
 /// /gen/image/ is base64 of [25, 14, {"w": 2, "h": 3, …}].
 fn icon_size(url: &str) -> Option<(u64, u64)> {
@@ -1004,7 +1280,7 @@ mod tests {
                     Unique ID: abc\nItem Level: 84\nQuality: 20\nSockets: W-W-W B\nLevelReq: 84\nImplicits: 2\n\
                     9% increased Cooldown Recovery Rate\n{enchant}5% increased Action Speed\n\
                     {fractured}+73 to maximum Mana\n+53 to Strength\n{crafted}{range:0.5}74% increased Energy Shield\nCorrupted";
-        let item = read_pob_item(text);
+        let item = read_pob_item(text, &HashMap::new());
         assert_eq!(item.rarity, "rare");
         assert_eq!(item.name, "Hate Tread");
         assert_eq!(item.type_line, "Warlock Boots");
@@ -1026,10 +1302,29 @@ mod tests {
     }
 
     #[test]
+    fn names_wiki_pictures() {
+        assert_eq!(wiki_icon("Diamond Flask"), "https://www.poewiki.net/images/c/c9/Diamond_Flask_inventory_icon.png");
+        assert_eq!(wiki_file("General's Cry inventory icon.png"), "https://www.poewiki.net/images/1/1d/General%27s_Cry_inventory_icon.png");
+    }
+
+    #[test]
+    fn rolls_ranges_as_pob() {
+        assert_eq!(apply_range("(100-150)% increased Evasion", 0.5), ("125% increased Evasion".into(), Some("100–150".into())));
+        assert_eq!(apply_range("Adds (5-10) to (20-30) Damage", 1.0).0, "Adds 10 to 30 Damage");
+        assert_eq!(apply_range("(-10-10)% to Cold", 0.0).0, "-10% to Cold");
+        assert_eq!(apply_range("(0.2-0.4)% of Damage Leeched", 0.5).0, "0.3% of Damage Leeched");
+        assert_eq!(apply_range("Socketed Gems (level 20)", 0.5).0, "Socketed Gems (level 20)");
+        let item = "Rarity: UNIQUE\nX\nY\nImplicits: 0\n{range:1}(30-40)% increased Mana\n(10-20) to Strength";
+        let ranges = HashMap::from([(2, 0.0)]);
+        let mods: Vec<_> = read_pob_item(item, &ranges).mods.into_iter().map(|m| m.text).collect();
+        assert_eq!(mods, vec!["40% increased Mana", "10 to Strength"]);
+    }
+
+    #[test]
     fn keeps_the_selected_variant() {
         let text = "Rarity: UNIQUE\nX\nY\nVariant: Old\nVariant: New\nSelected Variant: 2\nImplicits: 0\n\
                     {variant:1}Old line\n{variant:2}New line\nBoth";
-        let mods: Vec<_> = read_pob_item(text).mods.into_iter().map(|m| m.text).collect();
+        let mods: Vec<_> = read_pob_item(text, &HashMap::new()).mods.into_iter().map(|m| m.text).collect();
         assert_eq!(mods, vec!["New line", "Both"]);
     }
 
@@ -1051,7 +1346,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn dresses_a_build() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build1.code");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build3.code");
         let code = std::fs::read_to_string(path).unwrap();
         let mut view = parse(&decode(&code).unwrap()).unwrap();
         let price = PriceService::new(std::env::temp_dir().join("poe-tool-build-test"));
@@ -1068,10 +1363,25 @@ mod tests {
         println!("points {} asc {} keystones {:?}", tree.points, tree.ascendancy_points, tree.keystones);
         println!("asc notables {:?}", tree.ascendancy_notables);
         println!("masteries {:?}", tree.masteries);
-        // poe.ninja has no pictures for magic flasks or grafts.
         let missing: Vec<_> = gear.iter().chain(&tree.jewels).filter(|g| g.item.icon.is_none()).map(|g| g.slot.as_str()).collect();
-        assert!(missing.iter().all(|s| s.starts_with("Flask") || s.starts_with("Graft")), "{missing:?}");
-        assert!(view.skill_sets.iter().flat_map(|s| &s.groups).flat_map(|g| &g.gems).all(|g| g.colour.is_some()));
+        assert!(missing.is_empty(), "{missing:?}");
+        // PoB users name items themselves; the picture and tooltip go by the unique's name.
+        assert!(gear.iter().any(|g| g.item.name == "The Stampede"));
+        let gems = || view.skill_sets.iter().flat_map(|s| &s.groups).filter(|g| g.source.is_none()).flat_map(|g| &g.gems);
+        let bare: Vec<_> = gems().filter(|g| g.colour.is_none() || g.info.as_ref().is_none_or(|i| i.icon.is_none() || i.required_level.is_none())).map(|g| &g.name).collect();
+        assert!(bare.is_empty(), "{bare:?}");
+        let cry = gems().find(|g| g.name == "General's Cry").and_then(|g| g.info.clone()).unwrap();
+        println!("{cry:?}");
+        assert_eq!(cry.required_level, Some(24));
+        // A Duelist buys it from Clarissa; only a Marauder gets it for Lost in Love.
+        assert_eq!(view.class, "Duelist");
+        let quest_reward = |info: &GemInfo| info.rewards.iter().any(|r| r.npc.is_none() && r.quest == "Lost in Love");
+        assert!(cry.rewards.iter().any(|r| r.npc.as_deref() == Some("Clarissa")));
+        assert!(!quest_reward(&cry));
+        let gem = gems().find(|g| g.name == "General's Cry").unwrap();
+        let marauder = gem_info(&BuildAssets::default().get(&price).await.gems, gem, "Marauder").unwrap();
+        assert!(quest_reward(&marauder));
+        assert!(view.skill_sets.iter().flat_map(|s| &s.groups).any(|g| g.source.as_deref() == Some("The Yielding Mortality")));
         assert!(!tree.keystones.is_empty());
     }
 

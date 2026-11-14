@@ -48,6 +48,8 @@ export interface GemGroup {
   enabled: boolean;
   /** The build's main skill is in this group. */
   main: boolean;
+  /** The item that grants the group's skill, when an item does. */
+  source: string | null;
   gems: Gem[];
 }
 
@@ -58,6 +60,17 @@ export interface Gem {
   enabled: boolean;
   support: boolean;
   colour: "red" | "green" | "blue" | "white" | null;
+  /** What the wiki says of the gem; none for skills items grant. */
+  info: GemInfo | null;
+}
+
+export interface GemInfo {
+  icon: string | null;
+  requiredLevel: number | null;
+  /** The gem's wiki page. */
+  wiki: string;
+  /** Where the build's class gets it in the campaign; no npc for a quest's reward. */
+  rewards: { act: number; npc: string | null; quest: string }[];
 }
 
 export interface TreeView {

@@ -38,6 +38,7 @@ arboard = { version = "3", default-features = false }
 sysinfo = { version = "0.40", default-features = false, features = ["system"] }
 tauri-plugin-window-state = "2"
 roxmltree = "0.21.2"
+md5 = "0.8.1"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [

@@ -2089,7 +2089,7 @@ select {
   font: inherit;
 }
 
-/* Builds: a Path of Building build, laid out like pobb.in */
+/* Builds: a Path of Building build */
 
 .build-import {
   display: flex;
@@ -2233,7 +2233,6 @@ select {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1;
 }
 
 .gear-slot.loose {
@@ -2260,38 +2259,103 @@ select {
   overflow: hidden;
 }
 
-/* The item's tooltip, on hover. */
-.gear-pop {
-  display: none;
-  position: absolute;
-  left: 100%;
-  top: 0;
-  width: 440px;
-  z-index: 30;
-  margin-left: 8px;
+/* What's hovered shows beside it, over the page and inside the window. */
+.hover-card {
+  position: fixed;
+  z-index: 1000;
   pointer-events: none;
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.7);
 }
 
-.gear-pop.left {
-  left: auto;
-  right: 100%;
-  margin-left: 0;
-  margin-right: 8px;
-}
-
-.gear-slot:hover {
-  /* Above the other slots, so its tooltip covers them. */
-  z-index: 40;
-}
-
-.gear-slot:hover .gear-pop {
-  display: block;
+.gear-pop {
+  width: 440px;
 }
 
 /* Solid over the page, unlike a listing's. */
 .gear-pop .tooltip {
   background: #050505;
+}
+
+.gear-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gear-slot:hover .item-picture {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* A gem's tooltip: its picture, level, and where to get it in the campaign. */
+.gem {
+  cursor: default;
+  /* As wide as its name, so the tooltip shows beside the name. */
+  width: fit-content;
+}
+
+.gem-tip {
+  width: 320px;
+  padding: 10px 12px;
+  background: #050505;
+  border: 1px solid #3a3a3a;
+  border-radius: 4px;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gem-tip-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.gem-tip-head img {
+  width: 47px;
+  height: 47px;
+  object-fit: contain;
+}
+
+.gem-tip-name {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.gem-tip-level {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.gem-tip-row {
+  display: flex;
+  justify-content: space-between;
+}
+
+.gem-tip-rewards {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+}
+
+.gem-tip-rewards th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--text-dim);
+  border-bottom: 1px solid #2a2a2a;
+  padding: 2px 6px 3px 0;
+}
+
+.gem-tip-rewards td {
+  padding: 3px 6px 3px 0;
+}
+
+.gem-tip-reward {
+  color: #e0c27a;
+}
+
+.gem-tip-foot {
+  font-size: 11px;
 }
 
 /* Gems, as PoB colours them. */
