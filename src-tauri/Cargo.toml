@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Path of Exile companion tool"
 authors = ["you"]
 edition = "2024"
+license = "MIT"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
