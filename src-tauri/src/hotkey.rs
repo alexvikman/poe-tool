@@ -49,16 +49,18 @@ pub fn game_is_focused() -> bool {
     false
 }
 
-/// Sends one Ctrl+Alt+C to the game and returns the clipboard text it put there.
 #[cfg(windows)]
-pub fn copy_item() -> Result<String, String> {
-    use windows::Win32::System::DataExchange::GetClipboardSequenceNumber;
+mod keys {
+    pub use windows::Win32::UI::Input::KeyboardAndMouse::{
+        VK_A, VK_C, VK_CONTROL, VK_MENU, VK_RETURN, VK_SHIFT, VK_V,
+    };
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, SendInput,
-        VIRTUAL_KEY, VK_C, VK_CONTROL, VK_MENU, VK_SHIFT,
+        VIRTUAL_KEY,
     };
 
-    fn key(vk: VIRTUAL_KEY, up: bool) -> INPUT {
+    /// A key press (`up: false`) or release.
+    pub fn key(vk: VIRTUAL_KEY, up: bool) -> INPUT {
         INPUT {
             r#type: INPUT_KEYBOARD,
             Anonymous: INPUT_0 {
@@ -73,22 +75,87 @@ pub fn copy_item() -> Result<String, String> {
         }
     }
 
+    pub fn send(inputs: &[INPUT]) -> Result<(), String> {
+        let sent = unsafe { SendInput(inputs, std::mem::size_of::<INPUT>() as i32) };
+        if sent as usize == inputs.len() {
+            Ok(())
+        } else {
+            Err("Couldn't send keys to the game.".into())
+        }
+    }
+
+    /// Releases modifiers still held from the hotkey, which would change what our keys do.
+    pub fn release_modifiers() -> [INPUT; 3] {
+        [key(VK_SHIFT, true), key(VK_CONTROL, true), key(VK_MENU, true)]
+    }
+}
+
+/// Sends one Ctrl+Alt+C to the game and returns the clipboard text it put there.
+#[cfg(windows)]
+pub fn copy_item() -> Result<String, String> {
+    use keys::*;
+    use windows::Win32::System::DataExchange::GetClipboardSequenceNumber;
+
     let before = unsafe { GetClipboardSequenceNumber() };
-    // Shift still held from the hotkey would change what the copy does.
-    let inputs = [
-        key(VK_SHIFT, true),
+    send(&release_modifiers())?;
+    send(&[
         key(VK_CONTROL, false),
         key(VK_MENU, false),
         key(VK_C, false),
         key(VK_C, true),
         key(VK_MENU, true),
         key(VK_CONTROL, true),
-    ];
-    let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
-    if sent as usize != inputs.len() {
-        return Err("Couldn't send Ctrl+Alt+C to the game.".into());
-    }
+    ])
+    .map_err(|_| "Couldn't send Ctrl+Alt+C to the game.".to_string())?;
     wait_for_clipboard(|| unsafe { GetClipboardSequenceNumber() } != before)
+}
+
+/// Types a chat command in the game: Enter opens the chat box, Ctrl+A and Ctrl+V
+/// replace whatever is in it with `text` (through the clipboard, which is put back
+/// afterwards), and Enter sends it when `send` is set. One key press, one command.
+#[cfg(windows)]
+pub fn send_chat(text: &str, send_it: bool) -> Result<(), String> {
+    use keys::*;
+    use std::thread::sleep;
+
+    let mut clipboard = arboard::Clipboard::new().map_err(|e| format!("Clipboard: {e}"))?;
+    let previous = clipboard.get_text().ok();
+    clipboard
+        .set_text(text.to_string())
+        .map_err(|e| format!("Clipboard: {e}"))?;
+
+    let result = (|| {
+        send(&release_modifiers())?;
+        send(&[key(VK_RETURN, false), key(VK_RETURN, true)])?;
+        // Give the chat box a moment to open.
+        sleep(Duration::from_millis(40));
+        send(&[
+            key(VK_CONTROL, false),
+            key(VK_A, false),
+            key(VK_A, true),
+            key(VK_V, false),
+            key(VK_V, true),
+            key(VK_CONTROL, true),
+        ])?;
+        if send_it {
+            sleep(Duration::from_millis(40));
+            send(&[key(VK_RETURN, false), key(VK_RETURN, true)])?;
+        }
+        Ok::<(), String>(())
+    })();
+
+    // Let the game read the clipboard before it is put back: key presses are handled
+    // whenever the game gets to them, so this needs a good margin.
+    sleep(Duration::from_millis(1000));
+    if let Some(previous) = previous {
+        let _ = clipboard.set_text(previous);
+    }
+    result
+}
+
+#[cfg(not(windows))]
+pub fn send_chat(_text: &str, _send: bool) -> Result<(), String> {
+    Err("Chat commands only work on Windows.".into())
 }
 
 #[cfg(not(windows))]

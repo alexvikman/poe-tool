@@ -19,9 +19,18 @@ export interface PriceCheckSettings {
   league: string | null;
 }
 
+export interface ChatCommand {
+  enabled: boolean;
+  hotkey: string;
+  text: string;
+  /** Press Enter after typing. */
+  send: boolean;
+}
+
 export interface Settings {
   townMute: TownMuteSettings;
   priceCheck: PriceCheckSettings;
+  chatCommands: ChatCommand[];
 }
 
 export interface Status {

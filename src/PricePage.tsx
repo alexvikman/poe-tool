@@ -124,18 +124,9 @@ export function PricePage() {
       </section>
 
       <section className="card">
-        <div className="field">
-          <label htmlFor="hotkey">Hotkey</label>
-          <input
-            id="hotkey"
-            type="text"
-            value={pc.hotkey}
-            placeholder="Ctrl+D"
-            onChange={(e) => update({ hotkey: e.target.value }, true)}
-          />
-        </div>
         <p className="hint">
-          Path of Exile must run in Windowed or Windowed Fullscreen for the overlay to show over it.
+          The hotkey ({pc.hotkey || "none"}) is set under Hotkeys. Path of Exile must run in Windowed or
+          Windowed Fullscreen for the overlay to show over it.
         </p>
       </section>
 

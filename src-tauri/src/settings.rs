@@ -46,14 +46,77 @@ impl Default for PriceCheckSettings {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+/// A hotkey that types a chat command in the game: one key press, one command.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ChatCommand {
+    pub enabled: bool,
+    pub hotkey: String,
+    /// What to type, such as `/hideout`.
+    pub text: String,
+    /// Press Enter after typing; otherwise the text waits in the chat box to be edited.
+    pub send: bool,
+}
+
+impl Default for ChatCommand {
+    fn default() -> Self {
+        ChatCommand {
+            enabled: true,
+            hotkey: String::new(),
+            text: String::new(),
+            send: true,
+        }
+    }
+}
+
+/// What a hotkey does.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum HotkeyAction {
+    PriceCheck,
+    Chat { text: String, send: bool },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub town_mute: TownMuteSettings,
     pub price_check: PriceCheckSettings,
+    pub chat_commands: Vec<ChatCommand>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            town_mute: TownMuteSettings::default(),
+            price_check: PriceCheckSettings::default(),
+            chat_commands: vec![ChatCommand {
+                hotkey: "F5".into(),
+                text: "/hideout".into(),
+                ..ChatCommand::default()
+            }],
+        }
+    }
 }
 
 impl Settings {
+    /// The hotkeys in use and what each does: price check and the chat commands that
+    /// are on and have both a key and a text.
+    pub fn hotkeys(&self) -> Vec<(String, HotkeyAction)> {
+        let mut out = Vec::new();
+        if self.price_check.enabled && !self.price_check.hotkey.trim().is_empty() {
+            out.push((self.price_check.hotkey.clone(), HotkeyAction::PriceCheck));
+        }
+        for c in &self.chat_commands {
+            if c.enabled && !c.hotkey.trim().is_empty() && !c.text.trim().is_empty() {
+                out.push((
+                    c.hotkey.clone(),
+                    HotkeyAction::Chat { text: c.text.trim().to_string(), send: c.send },
+                ));
+            }
+        }
+        out
+    }
+
     pub fn load(path: &Path) -> Self {
         std::fs::read(path)
             .ok()
@@ -67,5 +130,33 @@ impl Settings {
         }
         let json = serde_json::to_vec_pretty(self).map_err(|e| e.to_string())?;
         std::fs::write(path, json).map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_settings_files_get_the_hideout_command() {
+        let s: Settings = serde_json::from_str(r#"{"townMute":{"enabled":false}}"#).unwrap();
+        assert!(!s.town_mute.enabled);
+        assert_eq!(s.chat_commands.len(), 1);
+        assert_eq!(s.chat_commands[0].hotkey, "F5");
+        assert_eq!(s.chat_commands[0].text, "/hideout");
+    }
+
+    #[test]
+    fn hotkeys_skip_unfinished_and_disabled_commands() {
+        let mut s = Settings::default();
+        s.chat_commands.push(ChatCommand { hotkey: "F6".into(), ..ChatCommand::default() });
+        s.chat_commands.push(ChatCommand {
+            enabled: false,
+            hotkey: "F7".into(),
+            text: "/exit".into(),
+            ..ChatCommand::default()
+        });
+        let keys: Vec<String> = s.hotkeys().into_iter().map(|(k, _)| k).collect();
+        assert_eq!(keys, vec!["Ctrl+D", "F5"]);
     }
 }

@@ -13,7 +13,8 @@ use price::stats::StatFilter;
 use price::trade::{SearchOptions, TradeResult};
 use price::{GemSearch, League, PriceCheck, PriceService};
 use serde::Serialize;
-use settings::Settings;
+use settings::{HotkeyAction, Settings};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -40,8 +41,24 @@ fn get_settings(state: State<AppState>) -> Settings {
     state.settings.lock().unwrap().clone()
 }
 
+/// Each hotkey in use, parsed. Refuses keys that aren't keys and keys used twice.
+fn parse_hotkeys(settings: &Settings) -> Result<Vec<(Shortcut, HotkeyAction)>, String> {
+    let mut out: Vec<(Shortcut, HotkeyAction)> = Vec::new();
+    for (text, action) in settings.hotkeys() {
+        let shortcut: Shortcut = text
+            .parse()
+            .map_err(|_| format!("\"{text}\" isn't a key the tool can listen for."))?;
+        if out.iter().any(|(s, _)| *s == shortcut) {
+            return Err(format!("{text} is used twice."));
+        }
+        out.push((shortcut, action));
+    }
+    Ok(out)
+}
+
 #[tauri::command]
 fn set_settings(state: State<AppState>, settings: Settings) -> Result<(), String> {
+    parse_hotkeys(&settings)?;
     settings.save(&state.settings_path)?;
     *state.settings.lock().unwrap() = settings;
     Ok(())
@@ -146,32 +163,55 @@ fn on_price_hotkey(app: AppHandle) {
     });
 }
 
-/// Registers the price check hotkey while the game is in front, and only then.
-fn watch_hotkey(app: AppHandle, settings: Arc<Mutex<Settings>>) {
-    let mut registered: Option<Shortcut> = None;
+fn on_chat_hotkey(text: String, send: bool) {
+    // Not on the hotkey thread: typing waits a little between keys.
+    std::thread::spawn(move || {
+        if let Err(e) = hotkey::send_chat(&text, send) {
+            eprintln!("chat command {text}: {e}");
+        }
+    });
+}
+
+/// Registers the hotkeys (price check, chat commands) while the game is in front, and
+/// only then, so other apps keep their keys.
+fn watch_hotkeys(app: AppHandle, settings: Arc<Mutex<Settings>>) {
+    let mut registered: HashMap<Shortcut, HotkeyAction> = HashMap::new();
     loop {
-        let wanted = {
-            let s = settings.lock().unwrap();
-            (s.price_check.enabled && hotkey::game_is_focused())
-                .then(|| s.price_check.hotkey.parse::<Shortcut>().ok())
-                .flatten()
+        let wanted: HashMap<Shortcut, HotkeyAction> = if hotkey::game_is_focused() {
+            parse_hotkeys(&settings.lock().unwrap())
+                .unwrap_or_default()
+                .into_iter()
+                .collect()
+        } else {
+            HashMap::new()
         };
         if wanted != registered {
             let gs = app.global_shortcut();
-            if let Some(old) = registered.take() {
-                let _ = gs.unregister(old);
+            for (shortcut, action) in registered.clone() {
+                if wanted.get(&shortcut) != Some(&action) {
+                    let _ = gs.unregister(shortcut);
+                    registered.remove(&shortcut);
+                }
             }
-            if let Some(new) = wanted {
+            for (shortcut, action) in wanted {
+                if registered.contains_key(&shortcut) {
+                    continue;
+                }
                 let handle = app.clone();
+                let on_press = action.clone();
                 let ok = gs
-                    .on_shortcut(new, move |_app, _shortcut, event| {
-                        if event.state == ShortcutState::Pressed {
-                            on_price_hotkey(handle.clone());
+                    .on_shortcut(shortcut, move |_app, _shortcut, event| {
+                        if event.state != ShortcutState::Pressed {
+                            return;
+                        }
+                        match &on_press {
+                            HotkeyAction::PriceCheck => on_price_hotkey(handle.clone()),
+                            HotkeyAction::Chat { text, send } => on_chat_hotkey(text.clone(), *send),
                         }
                     })
                     .is_ok();
                 if ok {
-                    registered = Some(new);
+                    registered.insert(shortcut, action);
                 }
             }
         }
@@ -208,8 +248,8 @@ pub fn run() {
             let handle = app.handle().clone();
             let hotkey_settings = settings.clone();
             std::thread::Builder::new()
-                .name("price-hotkey".into())
-                .spawn(move || watch_hotkey(handle, hotkey_settings))?;
+                .name("hotkeys".into())
+                .spawn(move || watch_hotkeys(handle, hotkey_settings))?;
 
             // Warm the caches so the first price check is quick.
             let warm = price.clone();

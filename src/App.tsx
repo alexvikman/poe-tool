@@ -1,12 +1,14 @@
 import { useState } from "react";
 import { PricePage } from "./PricePage";
 import { TownMutePage } from "./TownMutePage";
+import { HotkeysPage } from "./HotkeysPage";
 import "./App.css";
 
 const NAV = [
   { id: "price", label: "Price check", soon: false },
   { id: "builds", label: "Builds", soon: true },
   { id: "town-mute", label: "Town mute", soon: false },
+  { id: "hotkeys", label: "Hotkeys", soon: false },
 ] as const;
 
 type Page = (typeof NAV)[number]["id"];
@@ -32,6 +34,7 @@ function App() {
       <main className="main">
         {page === "price" && <PricePage />}
         {page === "town-mute" && <TownMutePage />}
+        {page === "hotkeys" && <HotkeysPage />}
       </main>
     </div>
   );

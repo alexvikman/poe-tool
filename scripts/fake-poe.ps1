@@ -8,6 +8,7 @@
 #
 # The fake game is a copy of PowerShell named like the game, in its own folder with a
 # logs\Client.txt next to it, where the tool looks for the log of a running game.
+# Its chat works like the game's (Enter opens it, Enter sends; sent lines go to chat.log).
 # Its window answers Ctrl+C and Ctrl+Alt+C like the game: it copies an item (-ItemFile,
 # or items\rare-boots.txt) to the clipboard. The files in items\ use the advanced
 # copy format (Ctrl+Alt+C), with roll ranges and tiers.
@@ -61,8 +62,30 @@ switch ($Action) {
         $label.Font = New-Object Drawing.Font('Segoe UI', 14)
         $label.Text = "Fake Path of Exile`n`nCtrl+C copies an item, like the game."
         $form.Controls.Add($label)
+        # Chat like the game's: Enter opens it, Enter sends; sent lines go to chat.log.
+        $chatLog = Join-Path $Dir 'chat.log'
+        $chat = New-Object Windows.Forms.TextBox
+        $chat.Dock = 'Bottom'
+        $chat.Visible = $false
+        $form.Controls.Add($chat)
+        $chat.Add_KeyDown({
+            if ($_.Control -and $_.KeyCode -eq 'A') { $chat.SelectAll(); $_.SuppressKeyPress = $true }
+            if ($_.KeyCode -eq 'Return') {
+                Add-Content -Path $chatLog -Value $chat.Text
+                $label.Text = "Sent: $($chat.Text)"
+                $chat.Text = ''
+                $chat.Visible = $false
+                $form.Focus()
+                $_.SuppressKeyPress = $true
+            }
+        })
         $form.Add_KeyDown({
             if ($_.Control -and $_.KeyCode -eq 'C' -and -not $NoCopy) { [Windows.Forms.Clipboard]::SetText($item) }
+            if ($_.KeyCode -eq 'Return' -and -not $chat.Visible) {
+                $chat.Visible = $true
+                $chat.Focus()
+                $_.SuppressKeyPress = $true
+            }
         })
         [Windows.Forms.Application]::Run($form)
     }

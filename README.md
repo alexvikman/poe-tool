@@ -6,12 +6,15 @@ A Windows desktop companion for Path of Exile 1, built with Tauri 2 (Rust) and R
 
 - **Price check.** Hover over an item in the game and press `Ctrl+D`: an overlay beside the
   cursor shows the poe.ninja price (currency, cards, fragments, uniques, gems, …) and live
-  listings from the official trade site. Rares get filters from their mods, with pseudo
+  listings from the official trade site: the item search for gear and gems (transfigured
+  gems included), the currency exchange for bulk items such as currency and cards. Rares get filters from their mods, with pseudo
   totals for life and resistances, which you can turn on and off and search again.
   Uniques get filters for their rolled mods, with each mod's roll range. In the
   Labyrinth's Divine Font, where the game can't copy gems, the overlay offers a search
   instead: type the gem's name to see what each transfigured version is worth. Leagues come
   from the trade site (cached for an hour), so a new league needs no update.
+- **Chat commands.** A hotkey types a chat command and sends it: `F5` → `/hideout` by
+  default; more under Hotkeys (`/menagerie`, `/kingsmarch`, `/exit`, … or your own text).
 - **Town mute.** Lowers the game's volume in the Windows volume mixer while you're in
   town (and optionally in hideouts), so Goblin Troupes and other noisy pets stay quiet.
   The volume goes back as you leave.
@@ -23,6 +26,12 @@ One key press does one thing in the game: the hotkey sends a single Ctrl+Alt+C (
 the item under the cursor. The hotkey is registered only while
 the game window is in front, so other apps keep their Ctrl+D. Prices come from
 poe.ninja and pathofexile.com's public trade API, within the rate limits the site sends.
+
+### How chat commands stay within the Terms of Use
+
+One key press, one chat command: Enter opens the chat, Ctrl+A and Ctrl+V put the command
+in it (through the clipboard, which is put back a second later), Enter sends it. Like the
+price check hotkey, the keys are registered only while the game is in front.
 
 ### How town mute stays within the Terms of Use
 
@@ -65,7 +74,9 @@ and writes zone changes to its `Client.txt`:
 
 `cargo run --example audio_probe` lists every audio session as `pid volume`.
 
-The fake game's window answers Ctrl+C and Ctrl+Alt+C like the game, so the price check hotkey works on it
+Its chat works like the game's (Enter opens it, Enter sends) and logs sent lines to
+`chat.log` next to its `Client.txt`, for testing chat commands. `-NoCopy` makes it copy
+nothing, like the Labyrinth's Divine Font. The fake game's window answers Ctrl+C and Ctrl+Alt+C like the game, so the price check hotkey works on it
 too: `.\scripts\fake-poe.ps1 start -ItemFile item.txt` (a rare pair of boots without
 `-ItemFile`). On any OS, `cargo run --example price_probe -- item.txt` prices an item file
 and prints the result.
