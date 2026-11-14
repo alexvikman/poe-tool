@@ -10,10 +10,10 @@ export function HotkeysPage() {
   const saveTimer = useRef<number | undefined>(undefined);
 
   useEffect(() => {
-    getSettings().then(setLocal);
+    getSettings().then(setLocal, (e) => setError(`Couldn't load settings: ${e}`));
   }, []);
 
-  if (!settings) return null;
+  if (!settings) return error ? <p className="bad">{error}</p> : null;
 
   function save(next: Settings, debounce = false) {
     setLocal(next);

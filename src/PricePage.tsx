@@ -15,11 +15,11 @@ export function PricePage() {
   const saveTimer = useRef<number | undefined>(undefined);
 
   useEffect(() => {
-    getSettings().then(setLocal);
+    getSettings().then(setLocal, (e) => setError(`Couldn't load settings: ${e}`));
     getLeagues().then(setLeagues, () => setLeagues([]));
   }, []);
 
-  if (!settings) return null;
+  if (!settings) return error ? <p className="bad">{error}</p> : null;
   const pc = settings.priceCheck;
 
   function update(patch: Partial<Settings["priceCheck"]>, debounce = false) {

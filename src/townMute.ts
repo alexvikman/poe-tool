@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { read } from "./api";
 
 export type AreaKind = "town" | "hideout" | "other" | "unknown";
 
@@ -45,8 +46,8 @@ export interface Status {
   audioError: string | null;
 }
 
-export const getSettings = () => invoke<Settings>("get_settings");
+export const getSettings = () => read<Settings>("get_settings");
 export const setSettings = (settings: Settings) => invoke<void>("set_settings", { settings });
-export const getStatus = () => invoke<Status>("get_status");
+export const getStatus = () => read<Status>("get_status");
 export const onStatus = (cb: (s: Status) => void): Promise<UnlistenFn> =>
   listen<Status>("town-mute-status", (e) => cb(e.payload));

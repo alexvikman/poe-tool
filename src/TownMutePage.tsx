@@ -23,7 +23,7 @@ export function TownMutePage() {
   const saveTimer = useRef<number | undefined>(undefined);
 
   useEffect(() => {
-    getSettings().then(setLocal);
+    getSettings().then(setLocal, (e) => setSaveError(`Couldn't load settings: ${e}`));
     getStatus().then(setStatus);
     const unlisten = onStatus(setStatus);
     return () => {
@@ -31,7 +31,7 @@ export function TownMutePage() {
     };
   }, []);
 
-  if (!settings) return null;
+  if (!settings) return saveError ? <p className="bad">{saveError}</p> : null;
   const tm = settings.townMute;
 
   // Save right away for toggles; debounce typing and sliding.

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { read } from "./api";
 
 export type Rarity =
   | "normal"
@@ -122,7 +123,7 @@ export const priceSearch = (check: PriceCheck, filters: StatFilter[], options: S
     league: check.league,
   });
 
-export const getLeagues = (refresh = false) => invoke<League[]>("get_leagues", { refresh });
+export const getLeagues = (refresh = false) => read<League[]>("get_leagues", { refresh });
 
 /** "1.2 div" when worth a divine or more, else "35 c". */
 export function formatChaos(chaos: number, divineChaos: number): string {

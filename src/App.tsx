@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { PricePage } from "./PricePage";
 import { TownMutePage } from "./TownMutePage";
 import { HotkeysPage } from "./HotkeysPage";
@@ -15,6 +16,11 @@ type Page = (typeof NAV)[number]["id"];
 
 function App() {
   const [page, setPage] = useState<Page>("price");
+  const [version, setVersion] = useState<string | null>(null);
+
+  useEffect(() => {
+    getVersion().then(setVersion, () => setVersion(null));
+  }, []);
   return (
     <div className="shell">
       <nav className="nav">
@@ -30,6 +36,7 @@ function App() {
             {item.soon && <span className="soon">Soon</span>}
           </button>
         ))}
+        {version && <div className="version">v{version}</div>}
       </nav>
       <main className="main">
         {page === "price" && <PricePage />}

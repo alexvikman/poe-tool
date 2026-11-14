@@ -232,6 +232,15 @@ pub fn run() {
             let ducker = Arc::new(Mutex::new(Ducker::new(config_dir.join("lowered-volumes.json"))));
             let status = Arc::new(Mutex::new(Status::default()));
             let price = Arc::new(PriceService::new(cache_dir));
+            // First, before anything slow: the windows already exist and their pages
+            // call the commands as soon as they load.
+            app.manage(AppState {
+                settings: settings.clone(),
+                settings_path,
+                status: status.clone(),
+                ducker: ducker.clone(),
+                price: price.clone(),
+            });
 
             let monitor = TownMute::new(settings.clone(), ducker.clone());
             let handle = app.handle().clone();
@@ -258,13 +267,6 @@ pub fn run() {
                 let _ = warm.check("Item Class: Stackable Currency\nRarity: Currency\nChaos Orb", &league).await;
             });
 
-            app.manage(AppState {
-                settings,
-                settings_path,
-                status,
-                ducker,
-                price,
-            });
 
             // Keep running in the tray so the mute keeps working with the window closed.
             let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;

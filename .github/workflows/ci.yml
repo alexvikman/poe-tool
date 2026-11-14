@@ -7,7 +7,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  # To publish the nightly release.
+  contents: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -41,7 +42,11 @@ jobs:
         run: cargo test --locked
 
       - name: Build installer
-        run: pnpm tauri build
+        shell: bash
+        # 0.1.<run> so an install shows which build it is.
+        run: |
+          echo '{"version":"0.1.${{ github.run_number }}"}' > ci-version.json
+          pnpm tauri build --config ci-version.json
 
       - name: Upload installer
         uses: actions/upload-artifact@v7
@@ -51,3 +56,17 @@ jobs:
             src-tauri/target/release/bundle/nsis/*-setup.exe
             src-tauri/target/release/poe-tool.exe
           if-no-files-found: error
+
+      # A fixed link to the newest installer, no zip:
+      # https://github.com/<owner>/<repo>/releases/download/nightly/PoE-Tool-setup.exe
+      - name: Publish the nightly release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp src-tauri/target/release/bundle/nsis/*-setup.exe PoE-Tool-setup.exe
+          gh release delete nightly --yes --cleanup-tag || true
+          gh release create nightly PoE-Tool-setup.exe --prerelease --target "$GITHUB_SHA" \
+            --title "Latest build (0.1.${{ github.run_number }})" \
+            --notes "Built from ${GITHUB_SHA::7} on main. Download PoE-Tool-setup.exe and run it; it updates an existing install."

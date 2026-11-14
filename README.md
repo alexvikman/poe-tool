@@ -86,6 +86,8 @@ and prints the result.
 On Windows: `pnpm tauri build` (NSIS installer in `src-tauri/target/release/bundle/nsis`).
 
 CI (`.github/workflows/ci.yml`) runs the Rust tests and builds the x64 installer on every
-push to `main` and every pull request. Download it from the run's **Artifacts**
-(`poe-tool-windows-x64-<run>`). The installer isn't code-signed yet, so Windows SmartScreen
+push to `main` and every pull request. Each push to `main` also publishes it as the
+`nightly` pre-release, at a fixed link:
+https://github.com/alexvikman/poe-tool/releases/download/nightly/PoE-Tool-setup.exe
+Builds are numbered 0.1.<run>; the app shows its version at the bottom of the menu. The installer isn't code-signed yet, so Windows SmartScreen
 asks once: **More info → Run anyway**.

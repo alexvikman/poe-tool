@@ -37,7 +37,8 @@ code {
 .shell {
   display: grid;
   grid-template-columns: 180px 1fr;
-  min-height: 100vh;
+  /* The menu keeps the window's height; the page scrolls beside it. */
+  height: 100vh;
 }
 
 .nav {
@@ -949,4 +950,11 @@ select {
   flex-direction: column;
   gap: 8px;
   align-items: flex-start;
+}
+
+.version {
+  margin-top: auto;
+  padding: 0 10px;
+  font-size: 11px;
+  color: var(--text-dim);
 }
