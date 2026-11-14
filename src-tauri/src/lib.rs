@@ -53,8 +53,8 @@ fn get_status(state: State<AppState>) -> Status {
 }
 
 #[tauri::command]
-async fn get_leagues(state: State<'_, AppState>) -> Result<Vec<League>, String> {
-    state.price.leagues().await
+async fn get_leagues(state: State<'_, AppState>, refresh: Option<bool>) -> Result<Vec<League>, String> {
+    state.price.leagues(refresh.unwrap_or(false)).await
 }
 
 async fn league(state: &AppState) -> String {

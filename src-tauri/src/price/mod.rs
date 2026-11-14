@@ -17,6 +17,8 @@ use trade::{SearchOptions, TradeClient, TradeResult};
 
 /// The trade site's stat and base lists change with patches; a day is fresh enough.
 const TRADE_DATA_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+/// Short, so a league that launches while the tool runs shows up within the hour.
+const LEAGUES_MAX_AGE: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -64,8 +66,10 @@ impl PriceService {
         }
     }
 
-    /// PC leagues from the trade site, current challenge league first.
-    pub async fn leagues(&self) -> Result<Vec<League>, String> {
+    /// PC trade leagues from the trade site, so a new league shows up without an
+    /// update: the challenge league, its Hardcore version, then Standard and Hardcore.
+    /// Ruthless leagues are left out. `refresh` skips the hour-long cache.
+    pub async fn leagues(&self, refresh: bool) -> Result<Vec<League>, String> {
         #[derive(Deserialize)]
         struct Resp {
             result: Vec<Entry>,
@@ -75,26 +79,29 @@ impl PriceService {
             id: String,
             realm: String,
         }
-        let bytes = self.cached("leagues.json", "/api/trade/data/leagues").await?;
+        if refresh {
+            let _ = std::fs::remove_file(self.cache_dir.join("leagues.json"));
+        }
+        let bytes = self
+            .cached("leagues.json", "/api/trade/data/leagues", LEAGUES_MAX_AGE)
+            .await?;
         let resp: Resp = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
         let mut leagues: Vec<League> = resp
             .result
             .into_iter()
-            .filter(|e| e.realm == "pc")
+            .filter(|e| e.realm == "pc" && !e.id.contains("Ruthless"))
             .map(|e| League { id: e.id })
             .collect();
-        // Permanent leagues last.
         leagues.sort_by_key(|l| {
-            matches!(
-                l.id.as_str(),
-                "Standard" | "Hardcore" | "Ruthless" | "Hardcore Ruthless"
-            )
+            let permanent = matches!(l.id.as_str(), "Standard" | "Hardcore");
+            let hardcore = l.id.starts_with("Hardcore") || l.id.starts_with("HC ");
+            (permanent, hardcore)
         });
         Ok(leagues)
     }
 
     pub async fn default_league(&self) -> String {
-        self.leagues()
+        self.leagues(false)
             .await
             .ok()
             .and_then(|l| l.into_iter().next())
@@ -164,8 +171,8 @@ impl PriceService {
         if let Some(index) = guard.as_ref() {
             return Ok(index.clone());
         }
-        let stats = self.cached("stats.json", "/api/trade/data/stats").await?;
-        let items = self.cached("items.json", "/api/trade/data/items").await?;
+        let stats = self.cached("stats.json", "/api/trade/data/stats", TRADE_DATA_MAX_AGE).await?;
+        let items = self.cached("items.json", "/api/trade/data/items", TRADE_DATA_MAX_AGE).await?;
         let stats: StatsResponse = serde_json::from_slice(&stats).map_err(|e| e.to_string())?;
         let items: ItemsResponse = serde_json::from_slice(&items).map_err(|e| e.to_string())?;
         let index = Arc::new(StatIndex::new(&stats, &items));
@@ -197,13 +204,13 @@ impl PriceService {
 
     /// A trade-site data file, from the disk cache when fresh, else downloaded.
     /// Falls back to a stale copy when the site can't be reached.
-    async fn cached(&self, file: &str, path: &str) -> Result<Vec<u8>, String> {
+    async fn cached(&self, file: &str, path: &str, max_age: Duration) -> Result<Vec<u8>, String> {
         let local = self.cache_dir.join(file);
         let fresh = std::fs::metadata(&local)
             .and_then(|m| m.modified())
             .ok()
             .and_then(|t| SystemTime::now().duration_since(t).ok())
-            .is_some_and(|age| age < TRADE_DATA_MAX_AGE);
+            .is_some_and(|age| age < max_age);
         if fresh {
             if let Ok(bytes) = std::fs::read(&local) {
                 return Ok(bytes);

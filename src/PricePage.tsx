@@ -10,6 +10,7 @@ export function PricePage() {
   const [check, setCheck] = useState<PriceCheck | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const saveTimer = useRef<number | undefined>(undefined);
 
   useEffect(() => {
@@ -28,6 +29,20 @@ export function PricePage() {
     if (debounce) saveTimer.current = window.setTimeout(save, 400);
     else save();
   }
+
+  async function refreshLeagues() {
+    setRefreshing(true);
+    try {
+      setLeagues(await getLeagues(true));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  const knownLeague = pc.league == null || leagues.some((l) => l.id === pc.league);
+  const privateLeague = knownLeague ? "" : pc.league ?? "";
 
   async function run() {
     setLoading(true);
@@ -49,7 +64,7 @@ export function PricePage() {
           <h1>Price check</h1>
           <p className="lede">
             Hover over an item in the game and press <kbd>{pc.hotkey || "Ctrl+D"}</kbd>. The tool
-            copies the item (one Ctrl+C) and shows prices from poe.ninja and the trade site beside
+            copies the item (one Ctrl+Alt+C, the game's advanced copy) and shows prices from poe.ninja and the trade site beside
             your cursor. The hotkey only works while the game is in front.
           </p>
         </div>
@@ -64,32 +79,59 @@ export function PricePage() {
       </header>
 
       <section className="card">
-        <div className="row-2">
-          <div className="field">
-            <label htmlFor="league">League</label>
-            <select
-              id="league"
-              value={pc.league ?? ""}
-              onChange={(e) => update({ league: e.target.value || null })}
-            >
-              <option value="">Current league{leagues[0] ? ` (${leagues[0].id})` : ""}</option>
-              {leagues.map((l) => (
-                <option key={l.id} value={l.id}>
-                  {l.id}
-                </option>
-              ))}
-            </select>
+        <div className="field">
+          <div className="field-head">
+            <span className="label">League</span>
+            <button className="btn small-btn" onClick={refreshLeagues} disabled={refreshing}>
+              {refreshing ? "Refreshing…" : "Refresh"}
+            </button>
           </div>
-          <div className="field">
-            <label htmlFor="hotkey">Hotkey</label>
+          <div className="radios">
+            <label className="radio">
+              <input type="radio" name="league" checked={pc.league == null} onChange={() => update({ league: null })} />
+              <span>
+                Current league{leagues[0] ? ` (${leagues[0].id})` : ""}
+                <small>Switches to a new league by itself when one starts.</small>
+              </span>
+            </label>
+            {leagues.map((l) => (
+              <label key={l.id} className="radio">
+                <input
+                  type="radio"
+                  name="league"
+                  checked={pc.league === l.id}
+                  onChange={() => update({ league: l.id })}
+                />
+                <span>{l.id}</span>
+              </label>
+            ))}
+          </div>
+          <div className="private-league">
+            <label htmlFor="private-league">or private league</label>
             <input
-              id="hotkey"
+              id="private-league"
               type="text"
-              value={pc.hotkey}
-              placeholder="Ctrl+D"
-              onChange={(e) => update({ hotkey: e.target.value }, true)}
+              placeholder="My League (PL12345)"
+              value={privateLeague}
+              onChange={(e) => update({ league: e.target.value.trim() ? e.target.value : null }, true)}
             />
           </div>
+          <p className="hint">
+            Leagues come from the trade site, so new ones show up without updating the tool.
+          </p>
+        </div>
+      </section>
+
+      <section className="card">
+        <div className="field">
+          <label htmlFor="hotkey">Hotkey</label>
+          <input
+            id="hotkey"
+            type="text"
+            value={pc.hotkey}
+            placeholder="Ctrl+D"
+            onChange={(e) => update({ hotkey: e.target.value }, true)}
+          />
         </div>
         <p className="hint">
           Path of Exile must run in Windowed or Windowed Fullscreen for the overlay to show over it.

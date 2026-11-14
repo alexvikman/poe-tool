@@ -118,7 +118,7 @@ export const priceSearch = (check: PriceCheck, filters: StatFilter[], options: S
     league: check.league,
   });
 
-export const getLeagues = () => invoke<League[]>("get_leagues");
+export const getLeagues = (refresh = false) => invoke<League[]>("get_leagues", { refresh });
 
 /** "1.2 div" when worth a divine or more, else "35 c". */
 export function formatChaos(chaos: number, divineChaos: number): string {

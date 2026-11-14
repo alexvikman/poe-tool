@@ -120,7 +120,10 @@ export function PriceResult({ check }: { check: PriceCheck }) {
         <section className="ninja">
           <div className="ninja-main">
             <div>
-              <div className="section-label">poe.ninja</div>
+              <div className="section-label">
+                poe.ninja · {check.league}
+                {item.rarity === "unique" && " · any roll"}
+              </div>
               <div className="ninja-price">
                 {formatChaos(best.chaos, check.divineChaos)}
                 {stack > 1 && (
