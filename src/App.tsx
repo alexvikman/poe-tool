@@ -51,7 +51,7 @@ function App() {
           {version && <div className="version">v{version}</div>}
         </div>
       </nav>
-      <main className="main">
+      <main className={`main ${page === "searches" ? "flush" : ""}`}>
         {page === "price" && <PricePage />}
         {page === "searches" && <SearchesPage />}
         {page === "town-mute" && <TownMutePage />}

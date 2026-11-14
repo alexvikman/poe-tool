@@ -8,6 +8,7 @@ pub mod price;
 mod searches;
 mod session;
 mod settings;
+mod sign_in;
 mod town_mute;
 
 use audio::Ducker;
@@ -252,9 +253,18 @@ async fn session_set(state: State<'_, AppState>, value: String) -> Result<Sessio
     session_status(state).await
 }
 
+/// Signs in on pathofexile.com in a window of the app and keeps that session.
 #[tauri::command]
-fn session_clear(state: State<AppState>) -> Result<(), String> {
+async fn session_sign_in(app: AppHandle, state: State<'_, AppState>) -> Result<SessionStatus, String> {
+    let account = sign_in::sign_in(app, state.price.clone()).await?;
+    state.sync_live();
+    Ok(SessionStatus { set: true, account: Some(account), error: None })
+}
+
+#[tauri::command]
+async fn session_clear(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     session::clear()?;
+    sign_in::forget(&app).await;
     state.sync_live();
     Ok(())
 }
@@ -265,11 +275,11 @@ fn live_state(state: State<AppState>) -> (std::collections::HashMap<String, Live
 }
 
 /// Travel to the seller's hideout (instant buyout) or whisper them, as the trade site's
-/// buttons do.
+/// buttons do: "travel" or "whisper".
 #[tauri::command]
-async fn live_use_token(state: State<'_, AppState>, token: String, league: String) -> Result<(), String> {
-    let s = session::get().ok_or("Add your POESESSID first.")?;
-    state.price.use_listing_token(&token, &league, &s).await
+async fn live_act(state: State<'_, AppState>, id: String) -> Result<&'static str, String> {
+    let s = session::get().ok_or("Sign in first.")?;
+    state.live.act(&id, &s).await
 }
 
 #[derive(Clone, Serialize)]
@@ -408,6 +418,7 @@ pub fn run() {
             // call the commands as soon as they load.
             let searches = Arc::new(Mutex::new(SearchStore::load(config_dir.join("searches.json"))));
             let live = Live::new(app.handle().clone(), price.clone());
+            live.start_rechecks();
             app.manage(AppState {
                 settings: settings.clone(),
                 settings_path,
@@ -503,9 +514,10 @@ pub fn run() {
             searches_open,
             session_status,
             session_set,
+            session_sign_in,
             session_clear,
             live_state,
-            live_use_token
+            live_act
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

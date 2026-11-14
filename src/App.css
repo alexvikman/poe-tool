@@ -1016,7 +1016,180 @@ select {
   flex-wrap: wrap;
 }
 
-/* Searches */
+/* Searches: builds on the left, the chosen build (or the live overview) on the right */
+
+.main.flush {
+  padding: 0;
+  overflow: hidden;
+}
+
+.searches {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  height: 100%;
+  min-height: 0;
+}
+
+.builds {
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px 10px;
+  min-height: 0;
+}
+
+.builds-scroll {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+}
+
+.builds-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 10px 2px;
+}
+
+.builds-add input,
+.builds-filter,
+.add-search input {
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 9px;
+  font: inherit;
+}
+
+.builds-filter {
+  margin-bottom: 4px;
+}
+
+.builds-empty {
+  padding: 4px 10px;
+}
+
+.build-item {
+  all: unset;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.build-item:hover {
+  color: var(--text);
+}
+
+.build-item.active {
+  background: var(--panel-2);
+  color: var(--text);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.build-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.build-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  flex: none;
+}
+
+.count {
+  background: var(--accent-dim);
+  color: var(--text);
+  border-radius: 9px;
+  padding: 0 7px;
+  font-size: 11px;
+}
+
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--text-dim);
+}
+
+.live-dot.good { background: var(--good); box-shadow: 0 0 6px var(--good); }
+.live-dot.bad { background: var(--bad); }
+
+.session-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 4px 12px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.session-box .hint {
+  margin: 0;
+  font-size: 11px;
+}
+
+.session-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+}
+
+.session-account {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.searches-main {
+  overflow-y: auto;
+  padding: 24px 28px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+}
+
+.banner {
+  margin: 0;
+  cursor: pointer;
+}
+
+.main-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.build-title {
+  all: unset;
+  flex: 1;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 24px;
+  border-bottom: 1px solid transparent;
+}
+
+.build-title:focus {
+  border-bottom-color: var(--accent-dim);
+}
 
 .inline-form {
   display: flex;
@@ -1036,52 +1209,62 @@ select {
   font: inherit;
 }
 
-.inline-form input.short {
-  flex: 0 0 150px;
-}
-
-.group {
-  gap: 6px;
-}
-
-.group-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.group-title,
-.search-name {
-  all: unset;
-  color: var(--text);
-  border-bottom: 1px solid transparent;
-}
-
-.group-title {
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: 18px;
-  color: var(--accent);
-  flex: 1;
-}
-
-.group-title:focus,
-.search-name:focus {
-  border-bottom-color: var(--accent-dim);
+.search-table {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
 }
 
 .search-row {
   display: grid;
-  grid-template-columns: 1fr auto auto auto;
-  gap: 10px;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  gap: 12px;
   align-items: center;
-  padding: 6px 0;
-  border-top: 1px solid var(--line);
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.search-row:hover {
+  background: var(--panel-2);
 }
 
 .search-main {
   display: flex;
   flex-direction: column;
   min-width: 0;
+}
+
+.search-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-name {
+  all: unset;
+  color: var(--text);
+  border-bottom: 1px solid transparent;
+}
+
+.search-name:focus {
+  border-bottom-color: var(--accent-dim);
+}
+
+.search-found {
+  white-space: nowrap;
+}
+
+.empty-row {
+  margin: 0;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.add-search {
+  display: grid;
+  grid-template-columns: 1fr 180px auto;
+  gap: 8px;
+  padding: 10px 14px;
 }
 
 .live-state.good { color: var(--good); }
@@ -1102,29 +1285,133 @@ select {
   transform: translateX(16px);
 }
 
-.hit {
-  display: grid;
-  grid-template-columns: 1fr auto auto;
-  gap: 12px;
-  align-items: center;
-  padding: 8px 0;
-  border-top: 1px solid var(--line);
-}
+/* Found listings */
 
-.hit-main {
+.feed {
   display: flex;
   flex-direction: column;
-  min-width: 0;
+  gap: 8px;
 }
 
-.hit-item {
+.feed-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.feed-head .chips {
+  flex: 1;
+}
+
+.feed-head .check {
+  align-items: center;
+  white-space: nowrap;
+}
+
+.feed-head .check input {
+  margin-top: 0;
+}
+
+.hit-card {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) 200px;
+  gap: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.hit-card.gone {
+  opacity: 0.45;
+}
+
+.hit-icon {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+}
+
+.hit-icon img {
+  max-width: 64px;
+  max-height: 128px;
+}
+
+.hit-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hit-title {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 15px;
   color: var(--text);
+}
+
+.hit-title.rarity-unique { color: #d98a4c; }
+.hit-title.rarity-rare { color: #e5d36a; }
+.hit-title.rarity-magic { color: #9b9bff; }
+.hit-title.rarity-gem { color: #1ba29b; }
+.hit-title.rarity-currency { color: #aa9e82; }
+.hit-title.rarity-card { color: #c4d7e5; }
+.hit-title.rarity-relic { color: #82ad6a; }
+
+.hit-base {
+  color: var(--text-dim);
+}
+
+.hit-mods {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  font-size: 13px;
+  color: #8888ff;
+  columns: 2 280px;
+  column-gap: 24px;
+}
+
+.hit-mods li {
+  break-inside: avoid;
+}
+
+.hit-mods .mod-implicit,
+.hit-mods .mod-enchant { color: #b4b4ff; }
+.hit-mods .mod-crafted { color: #b4b4ff; font-style: italic; }
+.hit-mods .mod-fractured { color: #a29162; }
+.hit-mods .mod-mutated { color: #c96fd8; }
+
+.mod-range {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.corrupted {
+  color: var(--bad);
+}
+
+.hit-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  text-align: right;
+}
+
+.hit-side .btn {
+  margin-top: 4px;
 }
 
 .hit-price {
   color: var(--accent);
+  font-size: 16px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.good {
+  color: var(--good);
 }
 
 .save-search {

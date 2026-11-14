@@ -23,20 +23,41 @@ export type LiveStatus =
   | { state: "retrying"; message: string }
   | { state: "failed"; message: string };
 
+export interface HitMod {
+  text: string;
+  kind: "enchant" | "implicit" | "fractured" | "explicit" | "crafted" | "mutated";
+  /** What it can roll, where that varies: "160–200". */
+  range: string | null;
+}
+
+export interface HitItem {
+  name: string;
+  typeLine: string;
+  icon: string | null;
+  rarity: "normal" | "magic" | "rare" | "unique" | "gem" | "currency" | "card" | "relic";
+  itemLevel: number | null;
+  corrupted: boolean;
+  sockets: string | null;
+  properties: string[];
+  mods: HitMod[];
+}
+
 export interface LiveHit {
+  id: string;
   searchId: string;
   searchName: string;
   group: string;
   league: string;
   seen: string;
-  itemName: string;
-  typeLine: string;
+  item: HitItem;
   amount: number | null;
   currency: string | null;
   account: string;
   hideoutToken: string | null;
   whisperToken: string | null;
   whisper: string | null;
+  /** Sold or taken down. */
+  gone: boolean;
 }
 
 export interface SessionStatus {
@@ -69,12 +90,14 @@ export const saveCheckSearch = (args: {
 export const sessionStatus = () => invoke<SessionStatus>("session_status");
 export const setSession = (value: string) => invoke<SessionStatus>("session_set", { value });
 export const clearSession = () => invoke<void>("session_clear");
+/** Opens pathofexile.com's sign-in in a window; resolves once signed in. */
+export const signIn = () => invoke<SessionStatus>("session_sign_in");
 
 export const liveState = () => read<[Record<string, LiveStatus>, LiveHit[]]>("live_state");
-export const actOnListing = (token: string, league: string) =>
-  invoke<void>("live_use_token", { token, league });
+/** Travel to the seller's hideout, or whisper them: says which it did. */
+export const actOnListing = (id: string) => invoke<"travel" | "whisper">("live_act", { id });
 
-export const onLiveHit = (cb: (hit: LiveHit) => void): Promise<UnlistenFn> =>
-  listen<LiveHit>("live-hit", (e) => cb(e.payload));
+export const onLiveHits = (cb: (hits: LiveHit[]) => void): Promise<UnlistenFn> =>
+  listen<LiveHit[]>("live-hits", (e) => cb(e.payload));
 export const onLiveStatus = (cb: (s: Record<string, LiveStatus>) => void): Promise<UnlistenFn> =>
   listen<Record<string, LiveStatus>>("live-status", (e) => cb(e.payload));
