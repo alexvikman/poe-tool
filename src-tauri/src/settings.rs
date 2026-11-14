@@ -34,6 +34,8 @@ pub struct PriceCheckSettings {
     pub hotkey: String,
     /// None: the current challenge league.
     pub league: Option<String>,
+    /// Search only listings that can be bought at once from a merchant tab.
+    pub instant_buyout: bool,
 }
 
 impl Default for PriceCheckSettings {
@@ -42,6 +44,7 @@ impl Default for PriceCheckSettings {
             enabled: true,
             hotkey: "Ctrl+D".into(),
             league: None,
+            instant_buyout: true,
         }
     }
 }

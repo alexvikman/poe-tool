@@ -32,6 +32,7 @@ export function PriceResult({ check }: { check: PriceCheck }) {
   const [trade, setTrade] = useState<TradeResult | null>(check.trade);
   const [tradeError, setTradeError] = useState<string | null>(check.tradeError);
   const [searching, setSearching] = useState(false);
+  const [showHidden, setShowHidden] = useState(false);
   const timer = useRef<number | undefined>(undefined);
   const searchId = useRef(0);
 
@@ -92,6 +93,7 @@ export function PriceResult({ check }: { check: PriceCheck }) {
     ["rare", "unique", "magic"].includes(item.rarity) && check.baseType !== title;
   const bulk = trade?.exchange ?? ["currency", "divinationCard", "other"].includes(item.rarity);
   const enabledCount = filters.filter((f) => f.enabled && f.id).length;
+  const hiddenCount = filters.filter((f) => f.hidden).length;
   const best = check.ninja[0];
 
   return (
@@ -157,22 +159,38 @@ export function PriceResult({ check }: { check: PriceCheck }) {
       {check.ninjaError && <p className="bad small">{check.ninjaError}</p>}
 
       <div className="chips">
-        {filters.length > 0 && (
-          <span className="chip static">
-            {enabledCount} of {filters.length} stats
-          </span>
+        {options.category && (
+          <button
+            className={`chip ${options.category.enabled ? "on" : ""}`}
+            onClick={() => updateOptions({ category: { ...options.category!, enabled: !options.category!.enabled } })}
+            title="Search the whole category, or only this base type"
+          >
+            {options.category.enabled ? options.category.label : check.baseType}
+          </button>
         )}
-        {!bulk && <button
-          className={`chip ${options.corrupted != null ? "on" : ""}`}
-          onClick={() =>
-            updateOptions({
-              corrupted: options.corrupted === null ? false : options.corrupted === false ? true : null,
-            })
-          }
-          title="Click to change"
-        >
-          {options.corrupted === null ? "Corrupted: any" : options.corrupted ? "Corrupted" : "Not corrupted"}
-        </button>}
+        {options.itemLevel && (
+          <button
+            className={`chip ${options.itemLevel.enabled ? "on" : ""}`}
+            onClick={() => updateOptions({ itemLevel: { ...options.itemLevel!, enabled: !options.itemLevel!.enabled } })}
+            title="Only items of this item level or higher"
+          >
+            Item level {options.itemLevel.value}
+            {options.itemLevel.enabled ? "+" : ""}
+          </button>
+        )}
+        {!bulk && (
+          <button
+            className={`chip ${options.corrupted != null ? "on" : ""}`}
+            onClick={() =>
+              updateOptions({
+                corrupted: options.corrupted === null ? false : options.corrupted === false ? true : null,
+              })
+            }
+            title="Click to change"
+          >
+            {options.corrupted === null ? "Corrupted: any" : options.corrupted ? "Corrupted" : "Not corrupted"}
+          </button>
+        )}
         <button
           className={`chip ${options.instantBuyout ? "on" : ""}`}
           onClick={() => updateOptions({ instantBuyout: !options.instantBuyout })}
@@ -183,8 +201,18 @@ export function PriceResult({ check }: { check: PriceCheck }) {
 
       {filters.length > 0 && (
         <section className="filters">
+          <div className="filters-head">
+            <span className="section-label">
+              {enabledCount} of {filters.length} stats
+            </span>
+            {hiddenCount > 0 && (
+              <button className="link-btn" onClick={() => setShowHidden(!showHidden)}>
+                {showHidden ? "Hide" : "Show"} {hiddenCount} hidden
+              </button>
+            )}
+          </div>
           {filters.map((f, i) =>
-            f.id ? (
+            f.hidden && !showHidden ? null : f.id ? (
               <FilterRow key={i} filter={f} onChange={(patch) => updateFilter(i, patch)} />
             ) : (
               <div key={i} className="filter-unknown">
@@ -264,6 +292,8 @@ function FilterRow({
         <span className={`filter-text kind-${f.kind}`}>
           {f.text}
           {f.tier != null && <span className="tier">T{f.tier}</span>}
+          {f.kind === "pseudo" && <span className="tier">pseudo</span>}
+          {f.hidden && <span className="tier">hidden</span>}
         </span>
       </label>
       {hasValue && (

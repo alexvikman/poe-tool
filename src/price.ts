@@ -68,12 +68,24 @@ export interface StatFilter {
   kind: string;
   roll: Roll | null;
   tier: number | null;
+  /** Out of sight unless asked for: fixed rolls, totals that repeat others. */
+  hidden: boolean;
+}
+
+export interface Toggle<T> {
+  value: T;
+  label: string;
+  enabled: boolean;
 }
 
 export interface SearchOptions {
   /** null: either. */
   corrupted: boolean | null;
   instantBuyout: boolean;
+  /** Search the category (Two-Handed Sword) instead of the base type. */
+  category: Toggle<string> | null;
+  /** Minimum item level. */
+  itemLevel: Toggle<number> | null;
 }
 
 export interface Listing {

@@ -1,5 +1,7 @@
 //! Price check: parse an item, then price it from poe.ninja and the trade site.
 
+pub mod category;
+pub mod filters;
 pub mod item;
 pub mod ninja;
 pub mod stats;
@@ -117,7 +119,9 @@ impl PriceService {
             .unwrap_or_else(|| "Standard".into())
     }
 
-    pub async fn check(&self, text: &str, league: &str) -> Result<PriceCheck, String> {
+    /// `instant_buyout`: search only listings that can be bought at once (the default
+    /// in settings; the user can change it per search).
+    pub async fn check(&self, text: &str, league: &str, instant_buyout: bool) -> Result<PriceCheck, String> {
         let item = item::parse(text).ok_or("That doesn't look like a Path of Exile item.")?;
         let stats = self.stat_index().await?;
         let base_type = stats.base_type(&item);
@@ -128,10 +132,10 @@ impl PriceService {
         };
 
         let filters = match item.rarity {
-            Rarity::Rare | Rarity::Magic | Rarity::Unique if item.identified => stats.filters(&item),
+            Rarity::Rare | Rarity::Magic | Rarity::Unique if item.identified => filters::build(&stats, &item),
             _ => Vec::new(),
         };
-        let options = SearchOptions::for_item(&item);
+        let options = SearchOptions::for_item(&item, instant_buyout);
 
         // Every item gets live listings: bulk items from the currency exchange, the rest
         // from the item search.

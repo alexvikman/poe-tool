@@ -1,5 +1,6 @@
 //! The official trade site's search API (pathofexile.com/trade), with its rate limits.
 
+use super::category;
 use super::item::{Item, Rarity};
 use super::stats::StatFilter;
 use serde::{Deserialize, Serialize};
@@ -21,14 +22,40 @@ pub struct SearchOptions {
     pub corrupted: Option<bool>,
     /// Only listings that can be bought at once from a merchant tab.
     pub instant_buyout: bool,
+    /// Search the item's category (Two-Handed Sword) instead of its base type.
+    #[serde(default)]
+    pub category: Option<Toggle<String>>,
+    /// Minimum item level.
+    #[serde(default)]
+    pub item_level: Option<Toggle<u32>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Toggle<T> {
+    pub value: T,
+    /// What the user sees ("Two-Handed Sword").
+    #[serde(default)]
+    pub label: String,
+    pub enabled: bool,
 }
 
 impl SearchOptions {
-    /// Uniques and gems are priced by whether they are corrupted; other items aren't.
-    pub fn for_item(item: &Item) -> Self {
+    pub fn for_item(item: &Item, instant_buyout: bool) -> Self {
+        let gear = matches!(item.rarity, Rarity::Normal | Rarity::Magic | Rarity::Rare);
+        let cluster = item.type_line.contains("Cluster Jewel");
         SearchOptions {
-            corrupted: matches!(item.rarity, Rarity::Unique | Rarity::Gem).then_some(item.corrupted),
-            instant_buyout: false,
+            // Gear and gems are priced by whether they are corrupted.
+            corrupted: (gear || matches!(item.rarity, Rarity::Unique | Rarity::Gem)).then_some(item.corrupted),
+            instant_buyout,
+            // Rares sell by what they are, not by their exact base.
+            category: category::trade_category(&item.item_class)
+                .filter(|_| gear && !cluster)
+                .map(|(id, label)| Toggle { value: id.to_string(), label: label.to_string(), enabled: true }),
+            item_level: item
+                .item_level
+                .filter(|_| gear && item.item_class != "Jewels")
+                .map(|ilvl| Toggle { value: ilvl.min(86), label: String::new(), enabled: false }),
         }
     }
 }
@@ -410,10 +437,14 @@ pub fn build_query(
             }
         }
         Rarity::Rare | Rarity::Magic | Rarity::Normal => {
-            query["type"] = json!(base_type);
-            query["filters"] = json!({
-                "type_filters": { "filters": { "rarity": { "option": "nonunique" } } }
-            });
+            query["filters"]["type_filters"] = json!({ "filters": { "rarity": { "option": "nonunique" } } });
+            match options.category.as_ref().filter(|c| c.enabled) {
+                Some(c) => query["filters"]["type_filters"]["filters"]["category"] = json!({ "option": c.value }),
+                None => query["type"] = json!(base_type),
+            }
+            if let Some(ilvl) = options.item_level.as_ref().filter(|l| l.enabled) {
+                misc.insert("ilvl".into(), json!({ "min": ilvl.value }));
+            }
         }
         _ => query["type"] = json!(item.type_line),
     }
@@ -426,9 +457,27 @@ pub fn build_query(
     if !misc.is_empty() {
         query["filters"]["misc_filters"] = json!({ "filters": misc });
     }
+    // Weapon and armour properties have their own filter groups; the rest are stats.
+    for f in filters.iter().filter(|f| f.enabled) {
+        let group = match f.id.split_once('.') {
+            Some(("weapon", key)) => Some(("weapon_filters", key)),
+            Some(("armour", key)) => Some(("armour_filters", key)),
+            _ => None,
+        };
+        if let Some((group, key)) = group {
+            let mut range = serde_json::Map::new();
+            if let Some(min) = f.min {
+                range.insert("min".into(), json!(min));
+            }
+            if let Some(max) = f.max {
+                range.insert("max".into(), json!(max));
+            }
+            query["filters"][group]["filters"][key] = Value::Object(range);
+        }
+    }
     let stats: Vec<Value> = filters
         .iter()
-        .filter(|f| f.enabled && !f.id.is_empty())
+        .filter(|f| f.enabled && !f.id.is_empty() && !f.id.starts_with("weapon.") && !f.id.starts_with("armour."))
         .map(|f| {
             let mut value = serde_json::Map::new();
             if let Some(min) = f.min {
@@ -485,6 +534,7 @@ mod tests {
                 kind: "pseudo".into(),
                 roll: None,
                 tier: None,
+                hidden: false,
             },
             StatFilter {
                 id: "explicit.stat_1".into(),
@@ -496,12 +546,29 @@ mod tests {
                 kind: "explicit".into(),
                 roll: None,
                 tier: None,
+                hidden: false,
+            },
+            StatFilter {
+                id: "weapon.dps".into(),
+                text: String::new(),
+                value: Some(258.0),
+                min: Some(237.0),
+                max: None,
+                enabled: true,
+                kind: "property".into(),
+                roll: None,
+                tier: None,
+                hidden: false,
             },
         ];
-        let q = build_query(&item, "Two-Toned Boots", None, &filters, &SearchOptions::for_item(&item));
+        let q = build_query(&item, "Two-Toned Boots", None, &filters, &SearchOptions::for_item(&item, false));
         assert_eq!(q["query"]["status"]["option"], "available");
-        assert!(q["query"]["filters"]["misc_filters"].is_null());
-        assert_eq!(q["query"]["type"], "Two-Toned Boots");
+        // Rares search their category, not their base, and not corrupted ones.
+        assert!(q["query"]["type"].is_null());
+        assert_eq!(q["query"]["filters"]["type_filters"]["filters"]["category"]["option"], "armour.boots");
+        assert_eq!(q["query"]["filters"]["misc_filters"]["filters"]["corrupted"]["option"], false);
+        assert!(q["query"]["filters"]["misc_filters"]["filters"]["ilvl"].is_null());
+        assert_eq!(q["query"]["filters"]["weapon_filters"]["filters"]["dps"]["min"], 237.0);
         assert_eq!(q["query"]["filters"]["type_filters"]["filters"]["rarity"]["option"], "nonunique");
         assert_eq!(
             q["query"]["stats"][0]["filters"],
@@ -515,7 +582,7 @@ mod tests {
             "Item Class: Belts\nRarity: Unique\nBelt of the Deceiver\nHeavy Belt\n--------\nItem Level: 84",
         )
         .unwrap();
-        let mut options = SearchOptions::for_item(&item);
+        let mut options = SearchOptions::for_item(&item, false);
         assert_eq!(options.corrupted, Some(false));
         options.instant_buyout = true;
         let q = build_query(&item, "Heavy Belt", None, &[], &options);
@@ -530,7 +597,7 @@ mod tests {
             "Item Class: Skill Gems\nRarity: Gem\nCold Snap of Power\n--------\nLevel: 1\nQuality: +18% (augmented)",
         )
         .unwrap();
-        let q = build_query(&item, "Cold Snap", Some("alt_x"), &[], &SearchOptions::for_item(&item));
+        let q = build_query(&item, "Cold Snap", Some("alt_x"), &[], &SearchOptions::for_item(&item, false));
         assert_eq!(q["query"]["type"], json!({ "option": "Cold Snap", "discriminator": "alt_x" }));
         assert_eq!(q["query"]["filters"]["misc_filters"]["filters"]["gem_level"]["min"], 1);
         assert_eq!(q["query"]["filters"]["misc_filters"]["filters"]["quality"]["min"], 18);

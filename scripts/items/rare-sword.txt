@@ -1,0 +1,28 @@
+Item Class: Two Hand Swords
+Rarity: Rare
+Pain Impaler
+Curved Blade
+--------
+Two Hand Sword
+Physical Damage: 73-120 (augmented)
+Elemental Damage: 49-102 (augmented)
+Critical Strike Chance: 6.00%
+Attacks per Second: 1.35
+Weapon Range: 1.3 metres
+--------
+Requirements:
+Level: 35
+--------
+Item Level: 35
+--------
+{ Implicit Modifier — Damage, Critical }
++40% to Global Critical Strike Multiplier (implicit)
+--------
+{ Prefix Modifier "Searing" (Tier: 6) — Damage, Elemental, Fire, Attack }
+Adds 49(46-53) to 102(90-114) Fire Damage
+{ Prefix Modifier "Cruel" (Tier: 6) — Damage, Physical, Attack }
+77(65-84)% increased Physical Damage
+{ Suffix Modifier "of Combat" (Tier: 2) — Gem }
++1 to Level of Socketed Melee Gems
+{ Suffix Modifier "of the Brute" (Tier: 5) }
+5(5-7)% reduced Enemy Stun Threshold

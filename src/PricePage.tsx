@@ -124,6 +124,20 @@ export function PricePage() {
       </section>
 
       <section className="card">
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={pc.instantBuyout}
+            onChange={(e) => update({ instantBuyout: e.target.checked })}
+          />
+          <span>
+            Instant buyout only
+            <small>Search only items you can buy at once from a merchant tab. You can change it per search.</small>
+          </span>
+        </label>
+      </section>
+
+      <section className="card">
         <p className="hint">
           The hotkey ({pc.hotkey || "none"}) is set under Hotkeys. Path of Exile must run in Windowed or
           Windowed Fullscreen for the overlay to show over it.

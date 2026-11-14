@@ -1,6 +1,6 @@
 //! Matches item mod lines to the trade site's stat ids, and finds base types.
 
-use super::item::{Item, ItemMod, ModKind, Rarity, Roll};
+use super::item::{Item, ItemMod, Rarity, Roll};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -79,6 +79,9 @@ pub struct StatFilter {
     pub roll: Option<Roll>,
     #[serde(default)]
     pub tier: Option<u32>,
+    /// Kept out of sight unless the user asks (constant rolls, totals that repeat others).
+    #[serde(default)]
+    pub hidden: bool,
 }
 
 pub struct StatIndex {
@@ -90,19 +93,6 @@ pub struct StatIndex {
     /// Bulk item name (lower case) → its id on the currency exchange ("divine").
     exchange_ids: HashMap<String, String>,
 }
-
-const WEAPON_OR_ARMOUR: &[&str] = &[
-    "Body Armours", "Helmets", "Gloves", "Boots", "Shields", "Claws", "Daggers", "Wands",
-    "One Hand Swords", "Thrusting One Hand Swords", "One Hand Axes", "One Hand Maces",
-    "Sceptres", "Rune Daggers", "Bows", "Staves", "Warstaves", "Two Hand Swords",
-    "Two Hand Axes", "Two Hand Maces", "Fishing Rods",
-];
-
-/// Mods that rarely make an item worth more; their filters start turned off.
-const FILLER_MODS: &[&str] = &["Attribute Requirements", "Light Radius", "Stun and Block Recovery"];
-
-/// How far below the item's own value a filter's minimum starts.
-const DEFAULT_SPREAD: f64 = 0.15;
 
 impl StatIndex {
     pub fn new(stats: &StatsResponse, items: &ItemsResponse) -> Self {
@@ -204,87 +194,17 @@ impl StatIndex {
         None
     }
 
-    /// The filters for a trade search: for rares and magic items, pseudo totals for
-    /// life and resistances, then each mod (those the totals cover start off); for
-    /// uniques, each mod, with the ones that roll in a range turned on. Lines the trade
-    /// site has no stat for are listed with an empty id.
-    pub fn filters(&self, item: &Item) -> Vec<StatFilter> {
-        let unique = item.rarity == Rarity::Unique;
-        let local = WEAPON_OR_ARMOUR.contains(&item.item_class.as_str());
-        let pseudo = if unique { Vec::new() } else { pseudo_totals(&item.mods) };
-        let mut out: Vec<StatFilter> = pseudo
-            .iter()
-            .map(|(id, text, value)| StatFilter {
-                id: id.to_string(),
-                text: text.replace('#', &format_value(*value)),
-                value: Some(*value),
-                min: min_for(*value),
-                max: None,
-                enabled: true,
-                kind: "pseudo".into(),
-                roll: None,
-                tier: None,
-            })
-            .collect();
-
-        for m in &item.mods {
-            if matches!(m.kind, ModKind::Scourge | ModKind::Crucible) {
-                continue;
-            }
-            let matched = self.match_mod(m, local);
-            if matched.is_none() && m.affix.is_none() && !m.text.chars().any(|c| c.is_ascii_digit()) {
-                // Probably flavour text from the plain copy, not a mod.
-                continue;
-            }
-            let (id, value) = matched.unwrap_or_default();
-            let variable = m.roll.is_some_and(|r| r.max > r.min);
-            let enabled = !id.is_empty()
-                && if unique {
-                    variable && m.kind == ModKind::Explicit
-                } else {
-                    let covered = !pseudo.is_empty() && is_covered_by_pseudo(&m.text);
-                    let filler = FILLER_MODS.iter().any(|f| m.text.contains(f));
-                    !covered && !filler && !matches!(m.kind, ModKind::Crafted | ModKind::Enchant)
-                };
-            let min = match (unique, value, m.roll) {
-                (true, Some(v), Some(r)) if r.max > r.min => Some(min_in_roll(v, r)),
-                (true, Some(v), _) => Some(v),
-                (_, v, _) => v.and_then(min_for),
-            };
-            out.push(StatFilter {
-                id,
-                text: m.text.clone(),
-                value,
-                min,
-                max: None,
-                enabled,
-                kind: m.kind.trade_group().into(),
-                roll: m.roll,
-                tier: m.tier,
-            });
-        }
-        out
+    /// The trade site's id for a pseudo stat, by its text ("+# total maximum Life").
+    pub fn pseudo_id(&self, text: &str) -> Option<String> {
+        self.by_text.get(&("pseudo".to_string(), text.to_string())).cloned()
     }
 }
 
-/// Just below the item's roll: a tenth of the roll's range lower, never under the
-/// range itself. `18 (15-25)` → 17.
-fn min_in_roll(value: f64, roll: Roll) -> f64 {
-    let (lo, hi) = if roll.min <= roll.max { (roll.min, roll.max) } else { (roll.max, roll.min) };
-    (value - 0.1 * (hi - lo)).ceil().clamp(lo.min(value), value)
-}
-
-/// A minimum a bit below the item's own value. None for negative values ("reduced"),
-/// where a minimum would rule out better items; the filter then only asks for the mod.
-fn min_for(value: f64) -> Option<f64> {
-    (value > 0.0).then(|| (value * (1.0 - DEFAULT_SPREAD)).floor())
-}
-
-fn format_value(v: f64) -> String {
+pub(crate) fn format_value(v: f64) -> String {
     if v.fract() == 0.0 {
         format!("{v}")
     } else {
-        format!("{v:.1}")
+        format!("{v:.2}").trim_end_matches('0').trim_end_matches('.').to_string()
     }
 }
 
@@ -313,7 +233,7 @@ pub fn template_of(text: &str) -> (String, Vec<f64>) {
     (template, values)
 }
 
-fn average(values: &[f64]) -> Option<f64> {
+pub(crate) fn average(values: &[f64]) -> Option<f64> {
     if values.is_empty() {
         None
     } else {
@@ -321,58 +241,10 @@ fn average(values: &[f64]) -> Option<f64> {
     }
 }
 
-const PSEUDO_LIFE: &str = "pseudo.pseudo_total_life";
-const PSEUDO_ELE_RES: &str = "pseudo.pseudo_total_elemental_resistance";
-const PSEUDO_CHAOS_RES: &str = "pseudo.pseudo_total_chaos_resistance";
-
-/// Totals the trade site also computes. Ours leave out some sources (such as life from
-/// Strength), so they are never higher than the site's and never exclude the item itself.
-fn pseudo_totals(mods: &[ItemMod]) -> Vec<(&'static str, &'static str, f64)> {
-    let mut life = 0.0;
-    let mut ele = 0.0;
-    let mut chaos = 0.0;
-    for m in mods {
-        if matches!(m.kind, ModKind::Enchant) {
-            continue;
-        }
-        let (t, v) = template_of(&m.text);
-        let Some(&first) = v.first() else { continue };
-        match t.as_str() {
-            "+# to maximum Life" => life += first,
-            "+#% to Fire Resistance" | "+#% to Cold Resistance" | "+#% to Lightning Resistance" => ele += first,
-            "+#% to Fire and Cold Resistances"
-            | "+#% to Fire and Lightning Resistances"
-            | "+#% to Cold and Lightning Resistances" => ele += 2.0 * first,
-            "+#% to all Elemental Resistances" => ele += 3.0 * first,
-            "+#% to Chaos Resistance" => chaos += first,
-            "+#% to Fire and Chaos Resistances" | "+#% to Cold and Chaos Resistances" | "+#% to Lightning and Chaos Resistances" => {
-                ele += first;
-                chaos += first;
-            }
-            _ => {}
-        }
-    }
-    let mut out = Vec::new();
-    if life > 0.0 {
-        out.push((PSEUDO_LIFE, "+# total maximum Life", life));
-    }
-    if ele > 0.0 {
-        out.push((PSEUDO_ELE_RES, "+#% total Elemental Resistance", ele));
-    }
-    if chaos > 0.0 {
-        out.push((PSEUDO_CHAOS_RES, "+#% total to Chaos Resistance", chaos));
-    }
-    out
-}
-
-fn is_covered_by_pseudo(text: &str) -> bool {
-    let (t, _) = template_of(text);
-    t == "+# to maximum Life" || (t.starts_with("+#% to ") && t.contains("Resistance") && !t.contains("maximum"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::price::item::ModKind;
 
     fn index() -> StatIndex {
         let stats: StatsResponse = serde_json::from_str(
@@ -437,44 +309,6 @@ mod tests {
     }
 
     #[test]
-    fn unique_filters_turn_on_variable_mods_and_flag_unknown_lines() {
-        let idx = index();
-        let item = super::super::item::parse(
-            "Item Class: Belts
-Rarity: Unique
-Belt of the Deceiver
-Heavy Belt
---------
-Item Level: 84
---------
-{ Unique Modifier \u{2014} Damage }
-18(15-25)% increased Global Physical Damage
-{ Unique Modifier \u{2014} Life }
-+37(30-40) to maximum Life
-{ Unique Modifier }
-+15(10-15)% to all Elemental Resistances
-{ Unique Modifier }
-Enemies within 2.5 metres are Intimidated \u{2014} Unscalable Value
-{ Unique Modifier }
-Something the site doesn't know",
-        )
-        .unwrap();
-        let f = idx.filters(&item);
-        let rows: Vec<(&str, bool, Option<f64>)> =
-            f.iter().map(|f| (f.id.as_str(), f.enabled, f.min)).collect();
-        assert_eq!(
-            rows,
-            vec![
-                ("explicit.stat_1310194496", true, Some(17.0)),
-                ("explicit.stat_3299347043", true, Some(36.0)),
-                ("explicit.stat_2901986750", true, Some(15.0)),
-                ("explicit.stat_2899095498", false, None),
-                ("", false, None),
-            ]
-        );
-    }
-
-    #[test]
     fn knows_transfigured_gems() {
         let idx = index();
         assert_eq!(idx.transfigured("Cold Snap of Power"), Some(("Cold Snap".into(), "alt_x".into())));
@@ -492,39 +326,5 @@ Something the site doesn't know",
         item.rarity = Rarity::Rare;
         item.type_line = "Two-Toned Boots".into();
         assert_eq!(idx.base_type(&item), "Two-Toned Boots");
-    }
-
-    #[test]
-    fn builds_pseudo_filters_and_turns_covered_mods_off() {
-        let idx = index();
-        let item = super::super::item::parse(
-            "Item Class: Boots
-Rarity: Rare
-Grim League
-Two-Toned Boots
---------
-Item Level: 80
---------
-+20% to Fire and Cold Resistances (implicit)
---------
-32% reduced Attribute Requirements
-+117 to maximum Life
-+36% to Lightning Resistance",
-        )
-        .unwrap();
-        let f = idx.filters(&item);
-        let ids: Vec<(&str, bool, Option<f64>)> =
-            f.iter().map(|f| (f.id.as_str(), f.enabled, f.min)).collect();
-        assert_eq!(
-            ids,
-            vec![
-                ("pseudo.pseudo_total_life", true, Some(99.0)),
-                ("pseudo.pseudo_total_elemental_resistance", true, Some(64.0)),
-                ("implicit.stat_2915988346", false, Some(17.0)),
-                ("explicit.stat_3639275092", false, None),
-                ("explicit.stat_3299347043", false, Some(99.0)),
-                ("explicit.stat_1671376347", false, Some(30.0)),
-            ]
-        );
     }
 }

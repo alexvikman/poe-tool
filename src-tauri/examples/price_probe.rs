@@ -22,7 +22,7 @@ fn main() {
             service.gem_search(&input, &league).await.map(|r| serde_json::to_string_pretty(&r).unwrap())
         } else {
             let text = std::fs::read_to_string(&input).expect("read item file");
-            service.check(&text, &league).await.map(|r| serde_json::to_string_pretty(&r).unwrap())
+            service.check(&text, &league, true).await.map(|r| serde_json::to_string_pretty(&r).unwrap())
         }
     });
     match json {

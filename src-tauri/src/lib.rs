@@ -92,7 +92,8 @@ async fn league(state: &AppState) -> String {
 #[tauri::command]
 async fn price_check(state: State<'_, AppState>, text: String) -> Result<PriceCheck, String> {
     let league = league(&state).await;
-    state.price.check(&text, &league).await
+    let instant_buyout = state.settings.lock().unwrap().price_check.instant_buyout;
+    state.price.check(&text, &league, instant_buyout).await
 }
 
 #[tauri::command]
@@ -273,7 +274,7 @@ pub fn run() {
             let warm = price.clone();
             tauri::async_runtime::spawn(async move {
                 let league = warm.default_league().await;
-                let _ = warm.check("Item Class: Stackable Currency\nRarity: Currency\nChaos Orb", &league).await;
+                let _ = warm.check("Item Class: Stackable Currency\nRarity: Currency\nChaos Orb", &league, true).await;
             });
 
 

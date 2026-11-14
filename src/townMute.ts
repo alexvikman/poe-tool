@@ -18,6 +18,8 @@ export interface PriceCheckSettings {
   hotkey: string;
   /** null: the current challenge league. */
   league: string | null;
+  /** Search only listings that can be bought at once, unless changed per search. */
+  instantBuyout: boolean;
 }
 
 export interface ChatCommand {

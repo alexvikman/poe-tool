@@ -87,7 +87,45 @@ pub struct Item {
     pub mirrored: bool,
     pub influences: Vec<String>,
     pub mods: Vec<ItemMod>,
+    /// Weapon properties as the item shows them (after its mods and quality).
+    #[serde(default)]
+    pub weapon: WeaponProps,
+    /// Armour properties as the item shows them.
+    #[serde(default)]
+    pub armour: ArmourProps,
 }
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WeaponProps {
+    /// (min, max) damage.
+    pub physical: Option<(f64, f64)>,
+    /// Each element's (min, max) damage.
+    pub elemental: Vec<(f64, f64)>,
+    pub chaos: Option<(f64, f64)>,
+    /// Percent.
+    pub crit: Option<f64>,
+    pub aps: Option<f64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ArmourProps {
+    pub armour: Option<f64>,
+    pub evasion: Option<f64>,
+    pub energy_shield: Option<f64>,
+    pub ward: Option<f64>,
+    /// Percent.
+    pub block: Option<f64>,
+}
+
+/// Keys of the weapon and armour property section; the section's first line (the
+/// weapon type, such as "Two Hand Sword") has none.
+const PROPERTY_KEYS: &[&str] = &[
+    "Physical Damage", "Elemental Damage", "Chaos Damage", "Critical Strike Chance",
+    "Attacks per Second", "Weapon Range", "Armour", "Evasion Rating", "Energy Shield", "Ward",
+    "Chance to Block", "Quality",
+];
 
 const SEPARATOR: &str = "--------";
 
@@ -147,6 +185,8 @@ pub fn parse(text: &str) -> Option<Item> {
         mirrored: false,
         influences: Vec::new(),
         mods: Vec::new(),
+        weapon: WeaponProps::default(),
+        armour: ArmourProps::default(),
     };
     if item.name.is_none() {
         item.name = Some(item.type_line.clone());
@@ -156,7 +196,10 @@ pub fn parse(text: &str) -> Option<Item> {
         if section[0] == "Requirements:" {
             continue;
         }
-        if parse_properties(section, &mut item) {
+        let property_section = section.iter().any(|l| {
+            l.split_once(": ").is_some_and(|(k, _)| PROPERTY_KEYS.contains(&k))
+        });
+        if parse_properties(section, &mut item) || property_section {
             continue;
         }
         if parse_flags(section, &mut item) {
@@ -187,6 +230,16 @@ fn parse_properties(section: &[&str], item: &mut Item) -> bool {
                 item.quality = number()
             }
             "Map Tier" => item.map_tier = number(),
+            "Physical Damage" => item.weapon.physical = ranges(value).first().copied(),
+            "Elemental Damage" => item.weapon.elemental = ranges(value),
+            "Chaos Damage" => item.weapon.chaos = ranges(value).first().copied(),
+            "Critical Strike Chance" => item.weapon.crit = decimal(value),
+            "Attacks per Second" => item.weapon.aps = decimal(value),
+            "Armour" => item.armour.armour = decimal(value),
+            "Evasion Rating" => item.armour.evasion = decimal(value),
+            "Energy Shield" => item.armour.energy_shield = decimal(value),
+            "Ward" => item.armour.ward = decimal(value),
+            "Chance to Block" => item.armour.block = decimal(value),
             "Sockets" => {
                 let s = value.trim().to_string();
                 item.links = s
@@ -350,6 +403,29 @@ fn looks_like_mod(line: &str) -> bool {
         || line.starts_with("Travel to ")
         || line.starts_with("Can be ")
         || line.ends_with('.') && !line.chars().any(|c| c.is_ascii_digit()))
+}
+
+/// `"1.35 (augmented)"` → 1.35, `"6.00%"` → 6.0.
+fn decimal(s: &str) -> Option<f64> {
+    let n: String = s
+        .trim()
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    n.parse().ok()
+}
+
+/// `"49-102, 10-20 (augmented)"` → [(49, 102), (10, 20)].
+fn ranges(s: &str) -> Vec<(f64, f64)> {
+    s.split(" (")
+        .next()
+        .unwrap_or("")
+        .split(',')
+        .filter_map(|r| {
+            let (a, b) = r.trim().split_once('-')?;
+            Some((a.trim().parse().ok()?, b.trim().parse().ok()?))
+        })
+        .collect()
 }
 
 fn leading_number(s: &str) -> Option<u32> {
@@ -557,6 +633,50 @@ Item Level: 80
             ("-10% to Fire Resistance".into(), Some(Roll { min: -15.0, max: -5.0 }))
         );
         assert_eq!(strip_ranges("Socketed Gems (Level 5)"), ("Socketed Gems (Level 5)".into(), None));
+    }
+
+    #[test]
+    fn reads_weapon_properties_and_keeps_them_out_of_the_mods() {
+        let item = parse(
+            "Item Class: Two Hand Swords
+Rarity: Rare
+Pain Impaler
+Curved Blade
+--------
+Two Hand Sword
+Physical Damage: 73-120 (augmented)
+Elemental Damage: 49-102 (augmented)
+Critical Strike Chance: 6.00%
+Attacks per Second: 1.35
+Weapon Range: 1.3 metres
+--------
+Requirements:
+Level: 35
+--------
+Item Level: 35
+--------
+{ Implicit Modifier \u{2014} Damage, Critical }
++40% to Global Critical Strike Multiplier (implicit)
+--------
+{ Prefix Modifier \"Searing\" (Tier: 6) \u{2014} Damage, Elemental, Fire, Attack }
+Adds 49(44-53) to 102(84-114) Fire Damage
+{ Prefix Modifier \"Cruel\" (Tier: 6) \u{2014} Damage, Physical, Attack }
+77(65-84)% increased Physical Damage",
+        )
+        .unwrap();
+        assert_eq!(item.weapon.physical, Some((73.0, 120.0)));
+        assert_eq!(item.weapon.elemental, vec![(49.0, 102.0)]);
+        assert_eq!(item.weapon.crit, Some(6.0));
+        assert_eq!(item.weapon.aps, Some(1.35));
+        let texts: Vec<&str> = item.mods.iter().map(|m| m.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            vec![
+                "+40% to Global Critical Strike Multiplier",
+                "Adds 49 to 102 Fire Damage",
+                "77% increased Physical Damage"
+            ]
+        );
     }
 
     #[test]
