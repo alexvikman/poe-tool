@@ -2432,7 +2432,7 @@ select {
 /* Tree */
 .passive-tree {
   position: relative;
-  height: 640px;
+  height: 1280px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   overflow: hidden;
