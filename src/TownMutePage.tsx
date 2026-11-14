@@ -48,11 +48,17 @@ export function TownMutePage() {
     else save();
   }
 
+  const inTown =
+    status?.areaKind === "town" || (status?.areaKind === "hideout" && tm.includeHideouts);
   const state = !tm.enabled
     ? { label: "Off", tone: "muted" }
-    : status?.lowered
-      ? { label: tm.townVolume === 0 ? "Muted" : `Lowered to ${tm.townVolume}%`, tone: "active" }
-      : { label: "Normal volume", tone: "idle" };
+    : status?.lowered && !inTown
+      ? // The volume is only raised while the game is in front (it changes its own
+        // volume when alt-tabbed).
+        { label: "Back to normal when you return to the game", tone: "active" }
+      : status?.lowered
+        ? { label: tm.townVolume === 0 ? "Muted" : `Lowered to ${tm.townVolume}%`, tone: "active" }
+        : { label: "Normal volume", tone: "idle" };
 
   return (
     <div className="page">

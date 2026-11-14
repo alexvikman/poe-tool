@@ -273,7 +273,7 @@ pub fn run() {
         if let RunEvent::Exit = event {
             // Never leave the game quiet after we quit.
             if let Some(state) = app.try_state::<AppState>() {
-                let _ = state.ducker.lock().unwrap().restore();
+                let _ = state.ducker.lock().unwrap().restore(true);
             }
         }
     });

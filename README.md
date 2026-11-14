@@ -32,7 +32,10 @@ sent. It does two things anyone could do by hand:
 
 Restoring is a state, not a one-off: outside town, every second, any game audio session
 still at the level the tool lowered it to is put back. The game can open a new session
-while loading a zone, and Windows gives it the app's last (lowered) volume. The volumes
+while loading a zone, and Windows gives it the app's last (lowered) volume. The game also
+changes its own volume when it is alt-tabbed, so while it is in the background the tool
+never raises the volume or takes a level as the original; it catches up within a second
+of the game coming back to the front. The volumes
 are saved to `lowered-volumes.json` in the app's config folder, so they are put back even
 after a crash.
 

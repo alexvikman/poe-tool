@@ -67,42 +67,60 @@ impl Ducker {
     }
 
     /// Sets the game's sessions to `factor` of their original volume. Returns how many
-    /// game sessions there are.
-    pub fn lower(&mut self, pids: &HashSet<u32>, factor: f32) -> Result<usize, String> {
+    /// game sessions there are. `focused`: the game window is in front (see
+    /// [`Ducker`] on why that matters).
+    pub fn lower(&mut self, pids: &HashSet<u32>, factor: f32, focused: bool) -> Result<usize, String> {
         let sessions = platform::sessions()?;
-        self.lower_in(&sessions, pids, factor)
+        self.lower_in(&sessions, pids, factor, focused)
     }
 
     /// Puts back every session we lowered, and any game session still at our level.
-    pub fn restore(&mut self) -> Result<(), String> {
+    pub fn restore(&mut self, focused: bool) -> Result<(), String> {
         if self.entries.is_empty() {
             return Ok(());
         }
         let sessions = platform::sessions()?;
-        self.restore_in(&sessions)
+        self.restore_in(&sessions, focused)
     }
 
-    fn lower_in<S: Session>(&mut self, sessions: &[S], pids: &HashSet<u32>, factor: f32) -> Result<usize, String> {
+    /// The game changes its own session volume when it goes to the background and
+    /// comes back (alt-tab), so while it is in the background we never take a level
+    /// as the user's original and never raise the volume: that would fight the game,
+    /// or make a muted background game audible. Whatever is left is set right within
+    /// a second of the game coming back to the front.
+    fn lower_in<S: Session>(
+        &mut self,
+        sessions: &[S],
+        pids: &HashSet<u32>,
+        factor: f32,
+        focused: bool,
+    ) -> Result<usize, String> {
         let before = self.entries.clone();
         let mut count = 0;
         for s in sessions.iter().filter(|s| pids.contains(&s.pid())) {
             count += 1;
             let current = s.volume()?;
-            let entry = self.entries.entry(s.key().to_string()).or_insert(Entry {
-                original: current,
-                lowered_to: current,
-                active: false,
-            });
+            let entry = match self.entries.get_mut(s.key()) {
+                Some(e) => e,
+                // A first sight in the background may be the game's own background level.
+                None if !focused => continue,
+                None => self.entries.entry(s.key().to_string()).or_insert(Entry {
+                    original: current,
+                    lowered_to: current,
+                    active: false,
+                }),
+            };
             if !entry.active {
-                // A level other than ours is the user's: take it as the new original.
-                // Our own lowered level never becomes the original.
-                if (current - entry.lowered_to).abs() > SAME {
+                // A level other than ours, seen while the game is in front, is the
+                // user's: the new original. Our own lowered level never is.
+                if focused && (current - entry.lowered_to).abs() > SAME {
                     entry.original = current;
                 }
                 entry.active = true;
             }
             entry.lowered_to = (entry.original * factor).clamp(0.0, 1.0);
-            if (current - entry.lowered_to).abs() > SAME {
+            let raise = entry.lowered_to > current;
+            if (current - entry.lowered_to).abs() > SAME && (focused || !raise) {
                 s.set_volume(entry.lowered_to)?;
             }
         }
@@ -112,13 +130,17 @@ impl Ducker {
         Ok(count)
     }
 
-    fn restore_in<S: Session>(&mut self, sessions: &[S]) -> Result<(), String> {
+    fn restore_in<S: Session>(&mut self, sessions: &[S], focused: bool) -> Result<(), String> {
         let before = self.entries.clone();
         for s in sessions {
             let Some(entry) = self.entries.get_mut(s.key()) else { continue };
             let current = s.volume()?;
             let ours = entry.active || (current - entry.lowered_to).abs() <= SAME;
             if ours && (current - entry.original).abs() > SAME {
+                if !focused && entry.original > current {
+                    // Wait until the game is in front again (it stays marked lowered).
+                    continue;
+                }
                 s.set_volume(entry.original)?;
             }
             entry.active = false;
@@ -296,10 +318,10 @@ mod tests {
     fn lowers_and_restores() {
         let mut d = ducker();
         let s = [session(0.8)];
-        d.lower_in(&s, &pids(), 0.1).unwrap();
+        d.lower_in(&s, &pids(), 0.1, true).unwrap();
         assert!(close(s[0].level.get(), 0.08));
         assert!(d.has_lowered());
-        d.restore_in(&s).unwrap();
+        d.restore_in(&s, true).unwrap();
         assert!(close(s[0].level.get(), 0.8));
         assert!(!d.has_lowered());
     }
@@ -310,10 +332,10 @@ mod tests {
         // loading, and Windows gives the new one the app's lowered volume.
         let mut d = ducker();
         let old = [session(1.0)];
-        d.lower_in(&old, &pids(), 0.1).unwrap();
-        d.restore_in(&old).unwrap();
+        d.lower_in(&old, &pids(), 0.1, true).unwrap();
+        d.restore_in(&old, true).unwrap();
         let new = [session(0.1)];
-        d.restore_in(&new).unwrap();
+        d.restore_in(&new, true).unwrap();
         assert!(close(new[0].level.get(), 1.0));
     }
 
@@ -323,11 +345,11 @@ mod tests {
         // remember 10% as the original.
         let mut d = ducker();
         let s = [session(1.0)];
-        d.lower_in(&s, &pids(), 0.1).unwrap();
-        d.restore_in(&[] as &[FakeSession]).unwrap();
+        d.lower_in(&s, &pids(), 0.1, true).unwrap();
+        d.restore_in(&[] as &[FakeSession], true).unwrap();
         d.entries.get_mut("game").unwrap().active = false; // the missed restore
-        d.lower_in(&s, &pids(), 0.1).unwrap();
-        d.restore_in(&s).unwrap();
+        d.lower_in(&s, &pids(), 0.1, true).unwrap();
+        d.restore_in(&s, true).unwrap();
         assert!(close(s[0].level.get(), 1.0));
     }
 
@@ -335,23 +357,67 @@ mod tests {
     fn keeps_a_volume_the_user_set_outside_town() {
         let mut d = ducker();
         let s = [session(1.0)];
-        d.lower_in(&s, &pids(), 0.1).unwrap();
-        d.restore_in(&s).unwrap();
+        d.lower_in(&s, &pids(), 0.1, true).unwrap();
+        d.restore_in(&s, true).unwrap();
         s[0].level.set(0.5); // the user turns the game down in the mixer
-        d.restore_in(&s).unwrap();
+        d.restore_in(&s, true).unwrap();
         assert!(close(s[0].level.get(), 0.5));
-        d.lower_in(&s, &pids(), 0.1).unwrap();
+        d.lower_in(&s, &pids(), 0.1, true).unwrap();
         assert!(close(s[0].level.get(), 0.05));
-        d.restore_in(&s).unwrap();
+        d.restore_in(&s, true).unwrap();
         assert!(close(s[0].level.get(), 0.5));
+    }
+
+    #[test]
+    fn alt_tab_while_changing_zones() {
+        // Town with the game in front, alt-tab, the game goes quieter in the background,
+        // zone change while away, back to the game, which writes back the level it had
+        // when it lost focus (ours).
+        let mut d = ducker();
+        let s = [session(1.0)];
+        d.lower_in(&s, &pids(), 0.1, true).unwrap();
+        s[0].level.set(0.0); // the game's own background level
+        d.restore_in(&s, false).unwrap();
+        assert!(close(s[0].level.get(), 0.0), "never raised in the background");
+        assert!(d.has_lowered(), "still owed a restore");
+        s[0].level.set(0.1); // the game comes back to the front with its saved level
+        d.restore_in(&s, true).unwrap();
+        assert!(close(s[0].level.get(), 1.0));
+    }
+
+    #[test]
+    fn town_entered_in_the_background_keeps_the_real_original() {
+        let mut d = ducker();
+        let s = [session(0.8)];
+        d.lower_in(&s, &pids(), 0.1, true).unwrap();
+        d.restore_in(&s, true).unwrap();
+        s[0].level.set(0.0); // alt-tab: the game mutes itself
+        d.lower_in(&s, &pids(), 0.1, false).unwrap();
+        assert!(close(s[0].level.get(), 0.0), "not raised to the town level in the background");
+        s[0].level.set(0.8); // back in front, the game restores its level
+        d.lower_in(&s, &pids(), 0.1, true).unwrap();
+        assert!(close(s[0].level.get(), 0.08));
+        d.restore_in(&s, true).unwrap();
+        assert!(close(s[0].level.get(), 0.8), "0 was never taken as the original");
+    }
+
+    #[test]
+    fn lowers_a_loud_background_game_in_town() {
+        // Without the game's own background muting, town noise is still lowered.
+        let mut d = ducker();
+        let s = [session(1.0)];
+        d.lower_in(&s, &pids(), 0.1, true).unwrap();
+        d.restore_in(&s, true).unwrap();
+        d.lower_in(&s, &pids(), 0.1, false).unwrap();
+        assert!(close(s[0].level.get(), 0.1));
     }
 
     #[test]
     fn leaves_other_apps_alone() {
         let mut d = ducker();
         let s = [session(1.0), FakeSession { key: "music".into(), pid: 7, level: Cell::new(0.1) }];
-        d.lower_in(&s, &pids(), 0.1).unwrap();
-        d.restore_in(&s).unwrap();
+        d.lower_in(&s, &pids(), 0.1, true).unwrap();
+        d.restore_in(&s, true).unwrap();
         assert!(close(s[1].level.get(), 0.1));
     }
 }

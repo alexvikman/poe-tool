@@ -212,14 +212,15 @@ impl TownMute {
     }
 
     fn apply_volume(&mut self, lower: bool, settings: &TownMuteSettings) {
+        let focused = crate::hotkey::game_is_focused();
         let mut ducker = self.ducker.lock().unwrap();
         let result = if lower {
             let factor = f32::from(settings.town_volume.min(100)) / 100.0;
-            ducker.lower(&self.game.pids, factor).map(|n| {
+            ducker.lower(&self.game.pids, factor, focused).map(|n| {
                 self.status.game_sessions = n;
             })
         } else {
-            ducker.restore()
+            ducker.restore(focused)
         };
         self.status.audio_error = result.err();
         self.status.lowered = ducker.has_lowered();
