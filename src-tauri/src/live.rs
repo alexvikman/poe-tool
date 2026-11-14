@@ -69,6 +69,9 @@ pub struct HitItem {
     pub name: String,
     pub type_line: String,
     pub icon: Option<String>,
+    /// Its size in inventory cells: the picture's, and the grid its sockets sit in.
+    pub width: u64,
+    pub height: u64,
     /// normal, magic, rare, unique, gem, currency, card, relic.
     pub rarity: &'static str,
     pub item_level: Option<u64>,
@@ -77,9 +80,11 @@ pub struct HitItem {
     pub sockets: Option<String>,
     /// Quality, armour, gem level and the like.
     pub properties: Vec<HitProperty>,
-    /// "Level 8, 42 Dex".
-    pub requirements: Option<String>,
+    /// "Level 8", "42 Dex": each part sorts on its own.
+    pub requirements: Vec<HitRequirement>,
     pub mods: Vec<HitMod>,
+    /// The site's line under the item: base percentile, defences at 20% quality, DPS.
+    pub extended: Vec<HitProperty>,
     pub unidentified: bool,
     pub mirrored: bool,
     /// The seller's note, "~b/o 1 alch".
@@ -94,6 +99,16 @@ pub struct HitProperty {
     pub value: Option<String>,
     /// The value is changed by the item's mods (the game shows it blue).
     pub augmented: bool,
+    /// The trade site's sort key for it, where results can be sorted by it.
+    pub sort: Option<&'static str>,
+}
+
+/// One requirement: "Level" and "49", or "Int" and "134".
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct HitRequirement {
+    pub name: String,
+    pub value: String,
+    pub sort: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -103,6 +118,8 @@ pub struct HitMod {
     pub kind: &'static str,
     /// What the mod can roll, where it varies: "160–200".
     pub range: Option<String>,
+    /// The trade site's sort key for it: its stat ("stat.explicit.stat_…").
+    pub sort: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -491,7 +508,8 @@ fn read_item(item: &Value) -> HitItem {
             // The fetch now sends {description, mods: [{magnitudes}]}; plain strings before.
             let line = m["description"].as_str().or(m.as_str()).map(strip_markup).unwrap_or_default();
             if !line.is_empty() {
-                mods.push(HitMod { text: line, kind, range: roll_range(m) });
+                let sort = m["hash"].as_str().map(str::to_string);
+                mods.push(HitMod { text: line, kind, range: roll_range(m), sort });
             }
         }
     }
@@ -501,27 +519,37 @@ fn read_item(item: &Value) -> HitItem {
         .flatten()
         .filter_map(property)
         .collect();
-    let requirements: Vec<String> = item["requirements"]
+    let requirements: Vec<HitRequirement> = item["requirements"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(|r| {
             let name = strip_markup(r["name"].as_str()?);
-            let value = r["values"][0][0].as_str()?;
-            Some(if name == "Level" { format!("Level {value}") } else { format!("{value} {name}") })
+            let value = r["values"][0][0].as_str()?.to_string();
+            let sort = match name.as_str() {
+                "Level" => Some("lvl"),
+                "Str" | "Strength" => Some("str"),
+                "Dex" | "Dexterity" => Some("dex"),
+                "Int" | "Intelligence" => Some("int"),
+                _ => None,
+            };
+            Some(HitRequirement { name, value, sort })
         })
         .collect();
     HitItem {
         name: text(&item["name"]),
         type_line: text(&item["typeLine"]),
         icon: item["icon"].as_str().map(str::to_string),
+        width: item["w"].as_u64().unwrap_or(1),
+        height: item["h"].as_u64().unwrap_or(1),
         rarity: rarity(item),
         item_level: item["ilvl"].as_u64(),
         corrupted: item["corrupted"].as_bool() == Some(true),
         sockets: sockets(&item["sockets"]),
         properties,
-        requirements: (!requirements.is_empty()).then(|| requirements.join(", ")),
+        requirements,
         mods,
+        extended: extended(&item["extended"]),
         unidentified: item["identified"].as_bool() == Some(false),
         mirrored: item["duplicated"].as_bool() == Some(true),
         note: item["note"].as_str().filter(|s| !s.is_empty()).map(str::to_string),
@@ -580,10 +608,45 @@ fn property(p: &Value) -> Option<HitProperty> {
         for (i, (v, _)) in values.iter().enumerate() {
             whole = whole.replace(&format!("{{{i}}}"), v);
         }
-        return Some(HitProperty { label: whole, value: None, augmented });
+        return Some(HitProperty { label: whole, value: None, augmented, sort: None });
     }
     let value = values.iter().map(|(v, _)| *v).collect::<Vec<_>>().join(", ");
-    Some(HitProperty { label, value: Some(value), augmented })
+    let sort = property_sort(&label);
+    Some(HitProperty { label, value: Some(value), augmented, sort })
+}
+
+/// The trade site's sort key for a property line, by its name.
+fn property_sort(label: &str) -> Option<&'static str> {
+    Some(match label {
+        "Quality" => "quality",
+        "Armour" => "ar",
+        "Evasion Rating" => "ev",
+        "Energy Shield" => "es",
+        "Ward" => "ward",
+        "Chance to Block" => "block",
+        "Critical Strike Chance" => "crit",
+        "Attacks per Second" => "aps",
+        "Physical Damage" => "pdps",
+        "Elemental Damage" => "edps",
+        _ => return None,
+    })
+}
+
+/// The site's line under an item, from the listing's extra numbers: the base's
+/// percentile and its defences at 20% quality (armour), or its DPS (weapons).
+fn extended(x: &Value) -> Vec<HitProperty> {
+    let mut out = Vec::new();
+    if let Some(p) = x["base_defence_percentile"].as_u64() {
+        out.push(HitProperty { label: "Base Percentile".into(), value: Some(format!("{p}%")), augmented: false, sort: Some("base_defence_percentile") });
+    }
+    for (key, label) in [("ar", "Armour"), ("ev", "Evasion"), ("es", "Energy Shield"), ("ward", "Ward"), ("dps", "DPS"), ("pdps", "Physical DPS"), ("edps", "Elemental DPS")] {
+        if let Some(v) = x[key].as_f64() {
+            let value = if v.fract() == 0.0 { format!("{v}") } else { format!("{v:.1}") };
+            let augmented = x[format!("{key}_aug")].as_bool() == Some(true);
+            out.push(HitProperty { label: label.into(), value: Some(value), augmented, sort: Some(key) });
+        }
+    }
+    out
 }
 
 fn sockets(v: &Value) -> Option<String> {
@@ -735,21 +798,28 @@ mod tests {
                            {"name":"Stack Size: {0}/{1}","values":[["3",0],["10",0]]}],
             "requirements": [{"name":"Level","values":[["8",0]]},{"name":"Dex","values":[["42",0]]}],
             "note": "~b/o 1 alch",
+            "extended": {"base_defence_percentile": 72, "ev": 288, "ev_aug": true},
             "implicitMods": ["+2 to Level of Socketed [Duration] Gems"],
             "explicitMods": ["[ItemRarity|Rarity] of Items found",
                 {"description": "Supported by Level 15 [SupportTrap::15|Trap Support]", "mods": [{"magnitudes": [{"min":"15","max":"15"}]}]},
-                {"description": "176% increased Evasion Rating", "mods": [{"magnitudes": [{"min":"160","max":"200"}]}]}]
+                {"description": "176% increased Evasion Rating", "hash": "stat.explicit.stat_124859000", "mods": [{"magnitudes": [{"min":"160","max":"200"}]}]}]
         });
         let r = read_item(&item);
         assert_eq!(r.rarity, "unique");
         assert_eq!(r.sockets.as_deref(), Some("W-W R"));
-        let p = |label: &str, value: Option<&str>, augmented| HitProperty {
+        let p = |label: &str, value: Option<&str>, augmented, sort| HitProperty {
             label: label.into(),
             value: value.map(Into::into),
             augmented,
+            sort,
         };
-        assert_eq!(r.properties, vec![p("Quality", Some("+20%"), true), p("Stack Size: 3/10", None, false)]);
-        assert_eq!(r.requirements.as_deref(), Some("Level 8, 42 Dex"));
+        assert_eq!(
+            r.properties,
+            vec![p("Quality", Some("+20%"), true, Some("quality")), p("Stack Size: 3/10", None, false, None)]
+        );
+        let req: Vec<_> = r.requirements.iter().map(|q| (q.name.as_str(), q.value.as_str(), q.sort)).collect();
+        assert_eq!(req, vec![("Level", "8", Some("lvl")), ("Dex", "42", Some("dex"))]);
+        assert_eq!(r.extended, vec![p("Base Percentile", Some("72%"), false, Some("base_defence_percentile")), p("Evasion", Some("288"), true, Some("ev"))]);
         assert_eq!(r.note.as_deref(), Some("~b/o 1 alch"));
         assert_eq!(r.mods[0].text, "+2 to Level of Socketed Duration Gems");
         assert_eq!(r.mods[0].kind, "implicit");
@@ -757,6 +827,7 @@ mod tests {
         assert_eq!(r.mods[2].text, "Supported by Level 15 Trap Support");
         assert_eq!(r.mods[2].range, None);
         assert_eq!(r.mods[3].range.as_deref(), Some("160–200"));
+        assert_eq!(r.mods[3].sort.as_deref(), Some("stat.explicit.stat_124859000"));
     }
 
     #[test]

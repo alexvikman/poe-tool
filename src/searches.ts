@@ -28,20 +28,33 @@ export interface HitMod {
   kind: "enchant" | "implicit" | "fractured" | "explicit" | "crafted" | "mutated";
   /** What it can roll, where that varies: "160–200". */
   range: string | null;
+  /** The trade site's sort key for it ("stat.explicit.stat_…"). */
+  sort: string | null;
+}
+
+/** One requirement: "Level" and "49", or "Int" and "134". */
+export interface HitRequirement {
+  name: string;
+  value: string;
+  sort: string | null;
 }
 
 export interface HitItem {
   name: string;
   typeLine: string;
   icon: string | null;
+  /** Its size in inventory cells. */
+  width: number;
+  height: number;
   rarity: "normal" | "magic" | "rare" | "unique" | "gem" | "currency" | "card" | "relic";
   itemLevel: number | null;
   corrupted: boolean;
   sockets: string | null;
   properties: HitProperty[];
-  /** "Level 8, 42 Dex". */
-  requirements: string | null;
+  requirements: HitRequirement[];
   mods: HitMod[];
+  /** The site's line under the item: base percentile, defences at 20% quality, DPS. */
+  extended: HitProperty[];
   unidentified: boolean;
   mirrored: boolean;
   /** The seller's note, "~b/o 1 alch". */
@@ -54,7 +67,19 @@ export interface HitProperty {
   value: string | null;
   /** Changed by the item's mods: the game shows it blue. */
   augmented: boolean;
+  /** The trade site's sort key for it, where results sort by it. */
+  sort: string | null;
 }
+
+/** How an ordinary search's results are sorted, as clicking a value on the site does. */
+export interface SearchSort {
+  key: string;
+  dir: "asc" | "desc";
+  /** What was clicked, to say what it's sorted by. */
+  label: string;
+}
+
+const sortBody = (sort?: SearchSort | null) => (sort ? { [sort.key]: sort.dir } : null);
 
 export interface Currency {
   name: string;
@@ -120,16 +145,21 @@ export interface SearchPage {
 }
 
 /** Runs a saved search now, as the trade site's Search button does. */
-export const runSavedSearch = (id: string) => invoke<SearchPage>("trade_search", { id, league: null, query: null });
+export const runSavedSearch = (id: string, sort?: SearchSort | null) =>
+  invoke<SearchPage>("trade_search", { id, league: null, query: null, sort: sortBody(sort) });
 /** Runs a query from the search form. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const runSearch = (league: string, query: any) => invoke<SearchPage>("trade_search", { id: null, league, query });
+export const runSearch = (league: string, query: any, sort?: SearchSort | null) =>
+  invoke<SearchPage>("trade_search", { id: null, league, query, sort: sortBody(sort) });
 export const searchMore = (id: string | null, league: string, queryId: string, ids: string[]) =>
   invoke<LiveHit[]>("trade_search_more", { id, league, queryId, ids });
 /** Keeps a query from the search form as a saved search in a build. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const addQuery = (groupId: string, name: string, league: string, query: any) =>
   invoke<SavedSearch>("searches_add_query", { groupId, name, league, query });
+
+/** A copy of a saved search right after it ("Name (copy)", not live). */
+export const duplicateSearch = (id: string) => invoke<SavedSearch>("searches_duplicate", { id });
 
 export const deleteSearch = (id: string) => invoke<void>("searches_delete", { id });
 export const searchUrl = (id: string) => invoke<string>("searches_open", { id });

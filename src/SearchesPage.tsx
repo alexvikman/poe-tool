@@ -19,10 +19,14 @@ import {
   updateSearch,
   tradeCurrencies,
   type Currency,
+  type HitItem,
   type HitMod,
+  type HitProperty,
+  type SearchSort,
   type SearchDetail,
   searchDetail,
   editSearch,
+  duplicateSearch,
   runSavedSearch,
   runSearch,
   searchMore,
@@ -422,6 +426,8 @@ function Board({
   const [open, setOpen] = useState<string | null>(() => rememberedSearch(view));
   // The edit form gets the whole width, as the trade site's form has.
   const [editing, setEditing] = useState(false);
+  // A copy just made opens in its filters, to be changed.
+  const [editNext, setEditNext] = useState<string | null>(null);
 
   const ids = entries.map((e) => e.search.id);
   const current =
@@ -502,6 +508,16 @@ function Board({
             hits={own(entry.search.id)}
             run={run}
             onEditing={setEditing}
+            startEditing={editNext === entry.search.id}
+            onStartedEditing={() => setEditNext(null)}
+            onDuplicate={() =>
+              run(
+                duplicateSearch(entry.search.id).then((copy) => {
+                  setEditNext(copy.id);
+                  choose(copy.id);
+                }),
+              )
+            }
           />
         ) : null}
       </div>
@@ -651,6 +667,9 @@ function SearchPane({
   hits,
   run,
   onEditing,
+  startEditing,
+  onStartedEditing,
+  onDuplicate,
 }: {
   entry: Entry;
   groups: SearchGroup[];
@@ -658,10 +677,17 @@ function SearchPane({
   hits: LiveHit[];
   run: (p: Promise<unknown>) => void;
   onEditing: (editing: boolean) => void;
+  /** Open in the search form (a copy just made), once. */
+  startEditing?: boolean;
+  onStartedEditing?: () => void;
+  onDuplicate: () => void;
 }) {
   const { search } = entry;
   // Live finds, what's listed now (an ordinary search), or the search form.
-  const [tab, setTab] = useState<"finds" | "listed" | "edit">("finds");
+  const [tab, setTab] = useState<"finds" | "listed" | "edit">(startEditing ? "edit" : "finds");
+  useEffect(() => {
+    if (startEditing) onStartedEditing?.();
+  }, []);
   // Asks Listed now to search: "Save and search" in the form does.
   const [searchAsked, setSearchAsked] = useState(0);
   useEffect(() => onEditing(tab === "edit"), [tab]);
@@ -714,6 +740,9 @@ function SearchPane({
           <button className="btn small-btn" onClick={open} disabled={opening} title="Open this search on the trade site">
             {opening ? "…" : "Trade ↗"}
           </button>
+          <button className="btn small-btn" onClick={onDuplicate} title="Make a copy of this search to change">
+            Duplicate
+          </button>
           <button
             className="icon-btn"
             title="Remove this search"
@@ -753,7 +782,7 @@ function SearchPane({
         <Listings
           key={`${search.id}-${searchAsked}`}
           cacheKey={search.id}
-          start={() => runSavedSearch(search.id)}
+          start={(sort) => runSavedSearch(search.id, sort)}
           asked={searchAsked}
           searchId={search.id}
           league={search.league}
@@ -878,6 +907,8 @@ interface SearchRun {
   /** When it searched (ms). */
   at: number;
   error: string | null;
+  /** What it's sorted by; none is by price, cheapest first. */
+  sort: SearchSort | null;
 }
 
 /** By saved search id, or SEARCH for the search form's. */
@@ -895,7 +926,7 @@ function Listings({
   league,
 }: {
   cacheKey: string;
-  start: () => Promise<SearchPage>;
+  start: (sort: SearchSort | null) => Promise<SearchPage>;
   /** Goes up each time the parent asks for a search (0: not asked). */
   asked?: number;
   /** Offer the Search button here (the search form has its own). */
@@ -918,17 +949,35 @@ function Listings({
     setRun(next);
   }
 
-  async function search(forAsked: number) {
+  async function search(forAsked: number, sort: SearchSort | null = searchRuns.get(cacheKey)?.sort ?? null) {
     setBusy(true);
     try {
-      const page = await start();
-      keep({ asked: forAsked, page, listings: page.listings, at: Date.now(), error: null });
+      const page = await start(sort);
+      keep({ asked: forAsked, page, listings: page.listings, at: Date.now(), error: null, sort });
     } catch (e) {
       const last = searchRuns.get(cacheKey);
-      keep({ asked: forAsked, page: last?.page ?? null, listings: last?.listings ?? [], at: Date.now(), error: String(e) });
+      keep({
+        asked: forAsked,
+        page: last?.page ?? null,
+        listings: last?.listings ?? [],
+        at: Date.now(),
+        error: String(e),
+        sort: last?.sort ?? null,
+      });
     } finally {
       setBusy(false);
     }
+  }
+
+  /** Price, cheapest first, unless a value was clicked. */
+  const sorted: SearchSort = run?.sort ?? { key: "price", dir: "asc", label: "price" };
+
+  /** As on the site: a value sorts highest first (price cheapest first); clicking it
+   *  again turns the order round. Each sort is a new search. */
+  function sortBy(key: string, label: string) {
+    if (busy) return;
+    const dir = sorted.key === key ? (sorted.dir === "desc" ? "asc" : "desc") : key === "price" ? "asc" : "desc";
+    search(run?.asked ?? asked, key === "price" && dir === "asc" ? null : { key, dir, label });
   }
 
   useEffect(() => {
@@ -962,6 +1011,15 @@ function Listings({
         <span className="label">
           {busy && !page ? "Searching…" : count ?? "Not searched yet"}
           {run && <span className="muted"> · searched {since(new Date(run.at).toISOString())}</span>}
+          {run?.sort && (
+            <span className="muted">
+              {" "}
+              · sorted by {run.sort.label} {run.sort.dir === "desc" ? "▼" : "▲"} ·{" "}
+              <button className="link-btn" onClick={() => !busy && search(run.asked, null)}>
+                sort by price
+              </button>
+            </span>
+          )}
         </span>
         {button && (
           <button className="btn small-btn" onClick={() => search(asked)} disabled={busy}>
@@ -974,7 +1032,7 @@ function Listings({
       )}
       {run?.error && <p className="bad small">{run.error}</p>}
       {run?.listings.map((h) => (
-        <HitCard key={h.id} hit={h} />
+        <HitCard key={h.id} hit={h} sorting={{ current: sorted, onSort: sortBy }} />
       ))}
       {page && run!.listings.length < page.ids.length && (
         <button className="btn load-more" onClick={more} disabled={busy}>
@@ -1121,7 +1179,7 @@ export function TradeSearchView({
       {run > 0 && league && (
         <Listings
           cacheKey={SEARCH}
-          start={() => runSearch(league, query)}
+          start={(sort) => runSearch(league, query, sort)}
           asked={run}
           button={false}
           searchId={null}
@@ -1190,7 +1248,45 @@ function useCurrencies(): Record<string, Currency> {
   return map;
 }
 
-function HitCard({ hit }: { hit: LiveHit }) {
+/** Sorting by a clicked value, where the results can be sorted (an ordinary search). */
+interface Sorting {
+  current: SearchSort | null;
+  onSort: (key: string, label: string) => void;
+}
+
+/** A value results can be sorted by: click to sort, again to turn the order round. */
+function Sortable({
+  sorting,
+  sortKey,
+  label,
+  row,
+  children,
+}: {
+  sorting?: Sorting;
+  sortKey: string | null | undefined;
+  label: string;
+  /** Lay out as a row (around a block, such as the price), the arrow beside it. */
+  row?: boolean;
+  children: React.ReactNode;
+}) {
+  if (!sorting || !sortKey) return <>{children}</>;
+  const on = sorting.current?.key === sortKey;
+  return (
+    <span
+      className={`sortable ${on ? "sorted" : ""} ${row ? "row" : ""}`}
+      title={`Sort by ${label}`}
+      onClick={(e) => {
+        e.stopPropagation();
+        sorting.onSort(sortKey, label);
+      }}
+    >
+      {children}
+      {on && <span className="sort-arrow">{sorting.current!.dir === "desc" ? " ▼" : " ▲"}</span>}
+    </span>
+  );
+}
+
+function HitCard({ hit, sorting }: { hit: LiveHit; sorting?: Sorting }) {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ text: string; bad: boolean } | null>(null);
   const currency = useCurrencies()[hit.currency ?? ""];
@@ -1211,24 +1307,28 @@ function HitCard({ hit }: { hit: LiveHit }) {
   return (
     <article className={`hit-card ${hit.gone ? "gone" : ""}`}>
       <div className="hit-icon">
-        {hit.item.icon && <img src={hit.item.icon} alt="" loading="lazy" />}
-        {hit.item.sockets && <Sockets sockets={hit.item.sockets} />}
+        <ItemPicture item={hit.item} />
       </div>
-      <ItemTooltip hit={hit} />
+      <ItemTooltip hit={hit} sorting={sorting} />
       <div className="hit-side">
         <span className="muted small">{hit.priceType === "~price" ? "Asking price" : "Buyout"}</span>
-        <div className="hit-price">
-          {hit.amount == null ? (
-            "No price"
-          ) : (
-            <>
-              {hit.amount}×{currency?.icon && <img className="currency-icon" src={currency.icon} alt="" />}
-              <span>{currency?.name ?? hit.currency}</span>
-            </>
-          )}
-        </div>
+        <Sortable sorting={sorting} sortKey="price" label="price" row>
+          <div className="hit-price">
+            {hit.amount == null ? (
+              "No price"
+            ) : (
+              <>
+                {hit.amount}×{currency?.icon && <img className="currency-icon" src={currency.icon} alt="" />}
+                <span>{currency?.name ?? hit.currency}</span>
+              </>
+            )}
+          </div>
+        </Sortable>
         <small className="muted">
-          <span className="seller">{hit.account}</span> · listed {since(hit.seen)}
+          <span className="seller">{hit.account}</span> ·{" "}
+          <Sortable sorting={sorting} sortKey="indexed" label="when listed">
+            listed {since(hit.seen)}
+          </Sortable>
         </small>
         <small className="muted">{hit.searchName}</small>
         {hit.gone ? (
@@ -1252,11 +1352,16 @@ function HitCard({ hit }: { hit: LiveHit }) {
   );
 }
 
-/** The item as the game's tooltip shows it: a header, then sections with lines between. */
-function ItemTooltip({ hit }: { hit: LiveHit }) {
+/** The item as the game's tooltip shows it: a header, then sections with lines between,
+ *  and the trade site's line under it (base percentile, defences at 20% quality, DPS).
+ *  With `sorting`, values the site sorts by can be clicked to sort. */
+function ItemTooltip({ hit, sorting }: { hit: LiveHit; sorting?: Sorting }) {
   const { item } = hit;
   const named = item.name && item.rarity !== "magic" && item.rarity !== "normal";
   const mods = (kinds: HitMod["kind"][]) => item.mods.filter((m) => kinds.includes(m.kind));
+  const value = (p: HitProperty) => (
+    <span className={p.augmented ? "tt-augmented" : "tt-value"}>{p.value}</span>
+  );
 
   const sections: React.ReactNode[] = [];
   if (item.properties.length > 0) {
@@ -1266,28 +1371,47 @@ function ItemTooltip({ hit }: { hit: LiveHit }) {
           {p.value == null ? (
             <span className="tt-label">{p.label}</span>
           ) : (
-            <>
+            <Sortable sorting={sorting} sortKey={p.sort} label={p.label}>
               <span className="tt-label">{p.label}: </span>
-              <span className={p.augmented ? "tt-augmented" : "tt-value"}>{p.value}</span>
-            </>
+              {value(p)}
+            </Sortable>
           )}
         </div>
       )),
     );
   }
-  if (item.itemLevel != null || item.requirements) {
+  if (item.itemLevel != null || item.requirements.length > 0) {
     sections.push(
       <>
         {item.itemLevel != null && (
           <div>
-            <span className="tt-label">Item Level: </span>
-            <span className="tt-value">{item.itemLevel}</span>
+            <Sortable sorting={sorting} sortKey="ilvl" label="Item Level">
+              <span className="tt-label">Item Level: </span>
+              <span className="tt-value">{item.itemLevel}</span>
+            </Sortable>
           </div>
         )}
-        {item.requirements && (
+        {item.requirements.length > 0 && (
           <div>
             <span className="tt-label">Requires </span>
-            <span className="tt-value">{item.requirements}</span>
+            {item.requirements.map((r, i) => (
+              <span key={i}>
+                {i > 0 && <span className="tt-label">, </span>}
+                <Sortable sorting={sorting} sortKey={r.sort} label={r.name === "Level" ? "required level" : `required ${r.name}`}>
+                  {r.name === "Level" ? (
+                    <>
+                      <span className="tt-label">Level </span>
+                      <span className="tt-value">{r.value}</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="tt-value">{r.value}</span>
+                      <span className="tt-label"> {r.name}</span>
+                    </>
+                  )}
+                </Sortable>
+              </span>
+            ))}
           </div>
         )}
       </>,
@@ -1300,10 +1424,12 @@ function ItemTooltip({ hit }: { hit: LiveHit }) {
         lines.map((m, i) => (
           <div key={i} className={`tt-mod mod-${m.kind}`}>
             {/* As on the trade site: hover a mod to see what it can roll, at the tooltip's left edge. */}
-            <span className="tt-line">
-              {m.text}
-              {m.range && <span className="mod-range">[{m.range.replace(/–/g, "—")}]</span>}
-            </span>
+            <Sortable sorting={sorting} sortKey={m.sort} label={m.text}>
+              <span className="tt-line">
+                {m.text}
+                {m.range && <span className="mod-range">[{m.range.replace(/–/g, "—")}]</span>}
+              </span>
+            </Sortable>
           </div>
         )),
       );
@@ -1320,43 +1446,103 @@ function ItemTooltip({ hit }: { hit: LiveHit }) {
   if (priceNote) sections.push(<div className="tt-note">{priceNote}</div>);
 
   return (
-    <div className={`tooltip rarity-${item.rarity}`}>
-      <header className={`tt-head ${named ? "double" : ""}`}>
-        {named ? (
-          <>
-            <div>{item.name}</div>
-            <div>{item.typeLine}</div>
-          </>
-        ) : (
-          <div>{item.typeLine || item.name}</div>
-        )}
-      </header>
-      <div className="tt-body">
-        {sections.map((section, i) => (
-          <div key={i} className="tt-section">
-            {i > 0 && <hr className="tt-sep" />}
-            {section}
-          </div>
-        ))}
+    <div className="tooltip-wrap">
+      <div className={`tooltip rarity-${item.rarity}`}>
+        <header className={`tt-head ${named ? "double" : ""}`}>
+          {named ? (
+            <>
+              <div>{item.name}</div>
+              <div>{item.typeLine}</div>
+            </>
+          ) : (
+            <div>{item.typeLine || item.name}</div>
+          )}
+        </header>
+        <div className="tt-body">
+          {sections.map((section, i) => (
+            <div key={i} className="tt-section">
+              {i > 0 && <hr className="tt-sep" />}
+              {section}
+            </div>
+          ))}
+        </div>
       </div>
+      {item.extended.length > 0 && (
+        <div className="tt-extended">
+          {item.extended.map((p, i) => (
+            <Sortable key={i} sorting={sorting} sortKey={p.sort} label={p.label}>
+              <span className="tt-label">{p.label}: </span>
+              {value(p)}
+            </Sortable>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
-/** Sockets in the game's colours, linked ones joined: "R-G-B B". */
-function Sockets({ sockets }: { sockets: string }) {
+/** One inventory cell, in pixels, as the trade site draws them: the picture is drawn
+ *  at its size in cells, with the sockets on it. */
+const CELL = 47.4645;
+/** A socket, and a link's long and short side (src/assets/socket.png). */
+const SOCKET = 35;
+const LINK_LONG = 38;
+const LINK_SHORT = 15;
+
+/** The item's picture with its sockets and links on it, as on the trade site. */
+function ItemPicture({ item }: { item: HitItem }) {
+  return (
+    <div className="item-picture" style={{ width: item.width * CELL, height: item.height * CELL }}>
+      {item.icon && <img src={item.icon} alt="" loading="lazy" />}
+      {item.sockets && <Sockets sockets={item.sockets} width={item.width} />}
+    </div>
+  );
+}
+
+/** Where the game puts socket `i` of an item `width` cells wide: along the first row,
+ *  back along the next, and so on. */
+function socketCell(i: number, width: number): { col: number; row: number } {
+  const row = Math.floor(i / width);
+  const along = i % width;
+  return { row, col: row % 2 === 0 ? along : width - 1 - along };
+}
+
+/** Sockets and links as the trade site draws them, from its own picture of them
+ *  ("R-G-B B": linked groups joined by "-"). */
+function Sockets({ sockets, width }: { sockets: string; width: number }) {
+  const list = sockets
+    .split(" ")
+    .flatMap((group, g) => group.split("-").map((colour) => ({ colour, group: g })));
+
   return (
     <div className="sockets" title={`Sockets: ${sockets}`}>
-      {sockets.split(" ").map((group, g) => (
-        <span key={g} className="socket-group">
-          {group.split("-").map((colour, i) => (
-            <span key={i} className="socket-wrap">
-              {i > 0 && <span className="socket-link" />}
-              <span className={`socket socket-${colour}`} />
-            </span>
-          ))}
-        </span>
-      ))}
+      {list.map((s, i) => {
+        const { col, row } = socketCell(i, width);
+        return (
+          <span
+            key={i}
+            className={`socket socket-${s.colour}`}
+            style={{ left: col * CELL + (CELL - SOCKET) / 2, top: row * CELL + (CELL - SOCKET) / 2 }}
+          />
+        );
+      })}
+      {list.slice(1).map((s, j) => {
+        if (s.group !== list[j].group) return null;
+        const a = socketCell(j, width);
+        const b = socketCell(j + 1, width);
+        // Between two sockets side by side, or one above the other.
+        const across = a.row === b.row;
+        const style = across
+          ? {
+              left: Math.min(a.col, b.col) * CELL + CELL / 2 + (CELL - LINK_LONG) / 2,
+              top: a.row * CELL + (CELL - LINK_SHORT) / 2,
+            }
+          : {
+              left: a.col * CELL + (CELL - LINK_SHORT) / 2,
+              top: Math.min(a.row, b.row) * CELL + CELL / 2 + (CELL - LINK_LONG) / 2,
+            };
+        return <span key={`l${j}`} className={`socket-link ${across ? "across" : "down"}`} style={style} />;
+      })}
     </div>
   );
 }

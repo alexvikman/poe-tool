@@ -1539,22 +1539,15 @@ select {
   flex: 1;
 }
 
-/* The chosen item, shown as the field's value until something is typed. */
-.sf-current {
-  position: absolute;
-  inset: 1px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 4px;
-  padding: 0 4px 0 8px;
-  pointer-events: none;
-  font-size: 13px;
-  color: var(--text);
+.sf-item input {
+  padding-right: 28px;
 }
 
-.sf-current .icon-btn {
-  pointer-events: auto;
+.sf-clear {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 .sf-suggest {
@@ -1819,7 +1812,7 @@ select {
 
 .hit-card {
   display: grid;
-  grid-template-columns: 72px minmax(0, 1fr) 220px;
+  grid-template-columns: 96px minmax(0, 1fr) 220px;
   gap: 18px;
   align-items: start;
   padding: 14px;
@@ -1835,7 +1828,7 @@ select {
 /* Narrow: price and buttons go under the item, so the item keeps its width. */
 @container (max-width: 680px) {
   .hit-card {
-    grid-template-columns: 56px minmax(0, 1fr);
+    grid-template-columns: 96px minmax(0, 1fr);
   }
 
   .hit-card .hit-side {
@@ -1844,60 +1837,115 @@ select {
     text-align: center;
   }
 
-  .hit-icon img {
-    max-width: 56px;
-  }
 }
 
 .hit-icon {
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
+  justify-content: center;
 }
 
-.hit-icon img {
-  max-width: 72px;
-  max-height: 144px;
+/* The item's picture, with sockets and links on it as the trade site draws them:
+   cells of 47.46px, from the site's own socket picture (CELL and the rest in
+   SearchesPage). */
+
+.item-picture {
+  position: relative;
+  flex: none;
 }
 
-/* Sockets */
+.item-picture img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
 
 .sockets {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 4px;
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
 }
 
-.socket-group,
-.socket-wrap {
-  display: inline-flex;
-  align-items: center;
+.socket,
+.socket-link {
+  position: absolute;
+  background: url("./assets/socket.png") no-repeat;
 }
 
 .socket {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  border: 1px solid rgba(0, 0, 0, 0.6);
-  background: #ddd;
+  width: 35px;
+  height: 35px;
+  pointer-events: auto;
 }
 
-.socket-link {
-  width: 5px;
-  height: 3px;
-  background: #b9a578;
+/* R, G, B, W: strength, dexterity, intelligence, white; A abyss; D delve. */
+.socket-R { background-position: -140px -35px; }
+.socket-G { background-position: -70px -105px; }
+.socket-B { background-position: -105px -35px; }
+.socket-W { background-position: -140px -70px; }
+.socket-A { background-position: -35px -70px; }
+.socket-D { background-position: -105px -70px; }
+
+.socket-link.across {
+  width: 38px;
+  height: 15px;
+  background-position: -175px 0;
 }
 
-.socket-R { background: #c43c3c; }
-.socket-G { background: #5fa53b; }
-.socket-B { background: #4876d6; }
-.socket-W { background: #e8e8e8; }
-.socket-A { background: #4a4a4a; }
-.socket-D { background: #9b9b9b; }
+.socket-link.down {
+  width: 15px;
+  height: 38px;
+  background-position: -175px -15px;
+}
 
 /* An item as the game's tooltip shows it */
+
+.tooltip-wrap {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* The site's line under the item: base percentile, defences at 20% quality, DPS. */
+.tt-extended {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  padding: 4px 14px;
+  background: #0b0a09;
+  border: 1px solid #1d1a16;
+  border-top: 0;
+  font-family: Georgia, "Times New Roman", serif;
+  font-variant: small-caps;
+  font-size: 13px;
+}
+
+/* A value results can be sorted by (in an ordinary search's results). */
+.sortable {
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+.sortable:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.sortable.row {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px;
+}
+
+.sortable.sorted {
+  background: rgba(200, 164, 92, 0.16);
+}
+
+.sort-arrow {
+  color: var(--accent);
+  font-size: 11px;
+  font-variant: normal;
+}
 
 .tooltip {
   position: relative;

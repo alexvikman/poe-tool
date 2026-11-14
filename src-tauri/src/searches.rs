@@ -79,6 +79,23 @@ impl SearchStore {
             .ok_or_else(|| "That search is gone.".to_string())
     }
 
+    /// A copy of a search, right after it in its build: "Name (copy)", not live.
+    pub fn duplicate(&mut self, id: &str) -> Result<SavedSearch, String> {
+        let group = self
+            .groups
+            .iter_mut()
+            .find(|g| g.searches.iter().any(|s| s.id == id))
+            .ok_or("That search is gone.")?;
+        let at = group.searches.iter().position(|s| s.id == id).unwrap();
+        let mut copy = group.searches[at].clone();
+        copy.id = new_id();
+        copy.name = format!("{} (copy)", copy.name);
+        copy.live = false;
+        group.searches.insert(at + 1, copy.clone());
+        self.save()?;
+        Ok(copy)
+    }
+
     /// Moves a search to another build, at the end.
     pub fn move_search(&mut self, id: &str, group_id: &str) -> Result<(), String> {
         if self.find(id).is_some_and(|(g, _)| g.id == group_id) {
@@ -238,6 +255,25 @@ mod tests {
     fn rejects_other_links() {
         assert!(from_link("https://poe.ninja/economy", "").is_err());
         assert!(from_link("https://www.pathofexile.com/trade/search/Covens/Wn8bkzVcm", "").is_err());
+    }
+
+    #[test]
+    fn duplicates_next_to_the_original() {
+        let path = std::env::temp_dir().join(format!("poe-tool-test-{}.json", new_id()));
+        let mut store = SearchStore::load(path.clone());
+        let group = store.add_group("Build").unwrap();
+        let mut first = from_link(LINK, "First").unwrap();
+        first.live = true;
+        let first = store.add_search(&group.id, first).unwrap();
+        store.add_search(&group.id, from_link(LINK, "Second").unwrap()).unwrap();
+
+        let copy = store.duplicate(&first.id).unwrap();
+        let names: Vec<_> = store.groups[0].searches.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["First", "First (copy)", "Second"]);
+        assert_ne!(copy.id, first.id);
+        assert!(!copy.live);
+        assert_eq!(copy.body, first.body);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

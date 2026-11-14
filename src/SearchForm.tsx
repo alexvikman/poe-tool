@@ -169,15 +169,11 @@ export function SearchForm({
   );
 }
 
-/** What the search is for: a unique, a base type, a gem, or typed text. */
+/** What the search is for: a unique, a base type, a gem, or typed text. The field
+ *  holds it as text to change like any other: type, then pick from the suggestions
+ *  (Enter takes the first); text no item matches searches item text, as on the site. */
 function ItemPicker({ query, onChange }: { query: Query; onChange: (q: Query) => void }) {
   const items = useTradeData<ItemGroupDef[]>("items");
-  const [text, setText] = useState("");
-  const [focused, setFocused] = useState(false);
-
-  const type = typeof query.type === "string" ? query.type : query.type?.option;
-  const current = [query.name, type].filter(Boolean).join(" ") || query.term || "";
-
   const all = useMemo(
     () =>
       (items ?? []).flatMap((g) =>
@@ -185,9 +181,26 @@ function ItemPicker({ query, onChange }: { query: Query; onChange: (q: Query) =>
       ),
     [items],
   );
+
+  const type = typeof query.type === "string" ? query.type : query.type?.option;
+  const disc = query.type?.discriminator;
+  // A transfigured gem goes by its own name, not the gem it comes from.
+  const gem = disc ? all.find((i) => i.entry.type === type && i.entry.disc === disc)?.label : undefined;
+  const current: string = gem ?? ([query.name, type].filter(Boolean).join(" ") || query.term || "");
+
+  const [text, setText] = useState(current);
+  const [focused, setFocused] = useState(false);
+  // Follows the query when it changes from outside (Clear, another search, the
+  // item list arriving).
+  useEffect(() => {
+    if (!focused) setText(current);
+  }, [current]);
+  const edited = text.trim() !== current;
   const words = text.toLowerCase().split(/\s+/).filter(Boolean);
   const matches =
-    words.length === 0 ? [] : all.filter((i) => words.every((w) => i.label.toLowerCase().includes(w))).slice(0, 40);
+    !edited || words.length === 0
+      ? []
+      : all.filter((i) => words.every((w) => i.label.toLowerCase().includes(w))).slice(0, 40);
 
   function pick(e: ItemDef) {
     const next = copy(query);
@@ -196,14 +209,21 @@ function ItemPicker({ query, onChange }: { query: Query; onChange: (q: Query) =>
     if (e.name) next.name = e.name;
     next.type = e.disc ? { option: e.type, discriminator: e.disc } : e.type;
     onChange(next);
-    setText("");
+    setText(e.name ? `${e.name} ${e.type}` : (e.text ?? e.type));
   }
 
-  function clear() {
+  /** Takes the text as it stands: an item it names exactly, any item when empty,
+   *  else item text to search for. */
+  function commit() {
+    const t = text.trim();
+    if (t === current) return;
+    const exact = all.find((i) => i.label.toLowerCase() === t.toLowerCase());
+    if (exact) return pick(exact.entry);
     const next = copy(query);
     delete next.name;
     delete next.type;
     delete next.term;
+    if (t) next.term = t;
     onChange(next);
   }
 
@@ -211,41 +231,47 @@ function ItemPicker({ query, onChange }: { query: Query; onChange: (q: Query) =>
     <div className="sf-item">
       <input
         type="text"
-        placeholder={current ? "" : "Search items… (any item)"}
+        placeholder="Search items… (any item)"
         value={text}
         onChange={(e) => setText(e.target.value)}
         onFocus={() => setFocused(true)}
-        onBlur={() => setTimeout(() => setFocused(false), 150)}
+        onBlur={() => {
+          setFocused(false);
+          commit();
+        }}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && text.trim()) {
+          if (e.key === "Enter") {
             e.preventDefault();
-            if (matches[0]) {
-              pick(matches[0].entry);
-            } else {
-              // As the site: text no item matches searches item text.
-              const next = copy(query);
-              delete next.name;
-              delete next.type;
-              next.term = text.trim();
-              onChange(next);
-              setText("");
-            }
+            if (matches[0]) pick(matches[0].entry);
+            else commit();
           }
-          if (e.key === "Escape") setText("");
+          if (e.key === "Escape") setText(current);
         }}
       />
-      {current && !text && (
-        <span className="sf-current">
-          {current}
-          <button className="icon-btn" title="Search any item" onClick={clear}>
-            ×
-          </button>
-        </span>
+      {text && (
+        <button
+          className="icon-btn sf-clear"
+          title="Search any item"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
+            const next = copy(query);
+            delete next.name;
+            delete next.type;
+            delete next.term;
+            onChange(next);
+            setText("");
+          }}
+        >
+          ×
+        </button>
       )}
       {focused && matches.length > 0 && (
         <div className="sf-suggest">
           {matches.map((m, i) => (
-            <button key={i} onMouseDown={() => pick(m.entry)}>
+            <button key={i} onMouseDown={(e) => {
+              e.preventDefault();
+              pick(m.entry);
+            }}>
               <span className={m.entry.flags?.unique ? "sf-unique" : ""}>{m.label}</span>
               <small className="muted">{m.group}</small>
             </button>

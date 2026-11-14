@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
-const LABEL: &str = "sign-in";
+pub const LABEL: &str = "sign-in";
 const SITE: &str = "https://www.pathofexile.com";
 
 /// Opens the sign-in window and waits until it signs in (the account's name) or is

@@ -28,6 +28,7 @@ use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, RunEvent, State, WebviewWindow, WindowEvent,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 use live::{Live, LiveHit, LiveStatus};
 use searches::{SearchGroup, SearchStore};
 use town_mute::{Status, TownMute};
@@ -83,8 +84,27 @@ fn set_settings(state: State<AppState>, settings: Settings) -> Result<(), String
 /// Called right before installing an update, which closes the app without the usual
 /// exit: put the game's volume back first.
 #[tauri::command]
-fn prepare_update(state: State<AppState>) {
+fn prepare_update(app: AppHandle, state: State<AppState>) {
     let _ = state.ducker.lock().unwrap().restore(true);
+    // The restart skips the usual save on exit.
+    let _ = app.save_window_state(window_state());
+}
+
+/// What's remembered of the main window between starts.
+fn window_state() -> StateFlags {
+    StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED
+}
+
+/// The first start's window: most of the screen it opens on, up to a comfortable size.
+/// Later starts open as it was left.
+fn size_first_window(window: &WebviewWindow) {
+    let Ok(Some(monitor)) = window.current_monitor() else { return };
+    let scale = monitor.scale_factor();
+    let area = monitor.work_area().size;
+    let width = (area.width as f64 / scale * 0.85).clamp(960.0, 1720.0);
+    let height = (area.height as f64 / scale * 0.88).clamp(600.0, 1080.0);
+    let _ = window.set_size(tauri::LogicalSize::new(width, height));
+    let _ = window.center();
 }
 
 #[tauri::command]
@@ -281,17 +301,22 @@ async fn trade_search(
     id: Option<String>,
     league: Option<String>,
     query: Option<serde_json::Value>,
+    sort: Option<serde_json::Value>,
 ) -> Result<live::SearchPage, String> {
     let session = session::get();
+    // As the site sorts when a value is clicked: {"es": "desc"}; by price otherwise.
+    let sort = sort.filter(|s| s.is_object()).unwrap_or_else(|| serde_json::json!({ "price": "asc" }));
     match id {
         Some(id) => {
             let (group, search) = saved_search(&state, &id)?;
             let from = live::HitSource { search_id: &search.id, search_name: &search.name, group: &group, league: &search.league };
-            state.live.search(&from, &search.body, session.as_deref()).await
+            let mut body = search.body.clone();
+            body["sort"] = sort;
+            state.live.search(&from, &body, session.as_deref()).await
         }
         None => {
             let league = league.ok_or("Which league?")?;
-            let body = serde_json::json!({ "query": query.ok_or("Nothing to search for.")?, "sort": { "price": "asc" } });
+            let body = serde_json::json!({ "query": query.ok_or("Nothing to search for.")?, "sort": sort });
             let from = live::HitSource { search_id: "", search_name: "", group: "", league: &league };
             state.live.search(&from, &body, session.as_deref()).await
         }
@@ -342,6 +367,12 @@ fn searches_add_query(
 #[tauri::command]
 async fn trade_data(state: State<'_, AppState>, kind: String) -> Result<serde_json::Value, String> {
     state.price.trade_data(&kind).await
+}
+
+/// A copy of a saved search, next to it, to change without touching the original.
+#[tauri::command]
+fn searches_duplicate(state: State<AppState>, id: String) -> Result<searches::SavedSearch, String> {
+    state.searches.lock().unwrap().duplicate(&id)
 }
 
 #[tauri::command]
@@ -553,8 +584,21 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
+        // The main window opens where and as large as it was left; the overlay and the
+        // sign-in window place themselves.
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(window_state())
+                .with_denylist(&[PRICE_WINDOW, sign_in::LABEL])
+                .build(),
+        )
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
+            if !config_dir.join(tauri_plugin_window_state::DEFAULT_FILENAME).exists() {
+                if let Some(main) = app.get_webview_window("main") {
+                    size_first_window(&main);
+                }
+            }
             let cache_dir = app.path().app_cache_dir()?;
             let settings_path = config_dir.join("settings.json");
             let settings = Arc::new(Mutex::new(Settings::load(&settings_path)));
@@ -631,7 +675,10 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| match event {
-            WindowEvent::CloseRequested { api, .. } => {
+            // Closing the main window keeps the app in the tray; other windows (sign-in)
+            // close for real.
+            WindowEvent::CloseRequested { api, .. } if window.label() == "main" => {
+                let _ = window.app_handle().save_window_state(window_state());
                 let _ = window.hide();
                 api.prevent_close();
             }
@@ -660,6 +707,7 @@ pub fn run() {
             searches_detail,
             searches_edit,
             searches_delete,
+            searches_duplicate,
             searches_open,
             session_status,
             session_set,
