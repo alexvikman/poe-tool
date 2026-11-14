@@ -496,22 +496,31 @@ pub fn build_query(
             query["filters"][group]["filters"][key] = Value::Object(range);
         }
     }
+    // Every stat goes along, the ones not ticked as disabled: the search ignores them,
+    // and the trade site shows them to tick there. Hidden fixed rolls go without a
+    // value; a unique's base implicit, the same on every copy, stays out.
     let stats: Vec<Value> = filters
         .iter()
-        .filter(|f| f.enabled && !f.id.is_empty() && !f.id.starts_with("weapon.") && !f.id.starts_with("armour."))
+        .filter(|f| !f.id.is_empty() && !f.id.starts_with("weapon.") && !f.id.starts_with("armour."))
+        .filter(|f| !(item.rarity == Rarity::Unique && f.hidden && f.kind == "implicit"))
         .map(|f| {
             let mut value = serde_json::Map::new();
-            if let Some(min) = f.min {
-                value.insert("min".into(), json!(min));
+            if !f.hidden || f.enabled {
+                if let Some(min) = f.min {
+                    value.insert("min".into(), json!(min));
+                }
+                if let Some(max) = f.max {
+                    value.insert("max".into(), json!(max));
+                }
             }
-            if let Some(max) = f.max {
-                value.insert("max".into(), json!(max));
+            let mut stat = json!({ "id": f.id });
+            if !value.is_empty() {
+                stat["value"] = Value::Object(value);
             }
-            if value.is_empty() {
-                json!({ "id": f.id })
-            } else {
-                json!({ "id": f.id, "value": value })
+            if !f.enabled {
+                stat["disabled"] = json!(true);
             }
+            stat
         })
         .collect();
     query["stats"] = json!([{ "type": "and", "filters": stats }]);
@@ -596,7 +605,10 @@ mod tests {
         assert_eq!(q["query"]["filters"]["type_filters"]["filters"]["rarity"]["option"], "nonunique");
         assert_eq!(
             q["query"]["stats"][0]["filters"],
-            json!([{ "id": "pseudo.pseudo_total_life", "value": { "min": 85.0 } }])
+            json!([
+                { "id": "pseudo.pseudo_total_life", "value": { "min": 85.0 } },
+                { "id": "explicit.stat_1", "value": { "max": 10.0 }, "disabled": true }
+            ])
         );
     }
 
