@@ -12,8 +12,16 @@ export interface TownMuteSettings {
   extraAreas: string[];
 }
 
+export interface PriceCheckSettings {
+  enabled: boolean;
+  hotkey: string;
+  /** null: the current challenge league. */
+  league: string | null;
+}
+
 export interface Settings {
   townMute: TownMuteSettings;
+  priceCheck: PriceCheckSettings;
 }
 
 export interface Status {

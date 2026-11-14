@@ -4,10 +4,21 @@ A Windows desktop companion for Path of Exile 1, built with Tauri 2 (Rust) and R
 
 ## Features
 
+- **Price check.** Hover over an item in the game and press `Ctrl+D`: an overlay beside the
+  cursor shows the poe.ninja price (currency, cards, fragments, uniques, gems, …) and live
+  listings from the official trade site. Rares get filters from their mods, with pseudo
+  totals for life and resistances, which you can turn on and off and search again.
 - **Town mute.** Lowers the game's volume in the Windows volume mixer while you're in
   town (and optionally in hideouts), so Goblin Troupes and other noisy pets stay quiet.
   The volume goes back as you leave.
-- Price check and build visualisation are planned.
+- Build visualisation is planned.
+
+### How price check stays within the Terms of Use
+
+One key press does one thing in the game: the hotkey sends a single Ctrl+C, which copies
+the item under the cursor. The hotkey is registered only while
+the game window is in front, so other apps keep their Ctrl+D. Prices come from
+poe.ninja and pathofexile.com's public trade API, within the rate limits the site sends.
 
 ### How town mute stays within the Terms of Use
 
@@ -43,6 +54,11 @@ and writes zone changes to its `Client.txt`:
 ```
 
 `cargo run --example audio_probe` lists every audio session as `pid volume`.
+
+The fake game's window answers Ctrl+C like the game, so the price check hotkey works on it
+too: `.\scripts\fake-poe.ps1 start -ItemFile item.txt` (a rare pair of boots without
+`-ItemFile`). On any OS, `cargo run --example price_probe -- item.txt` prices an item file
+and prints the result.
 
 ## Building a Windows installer
 

@@ -26,10 +26,31 @@ impl Default for TownMuteSettings {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PriceCheckSettings {
+    pub enabled: bool,
+    /// Registered only while the game window is in front.
+    pub hotkey: String,
+    /// None: the current challenge league.
+    pub league: Option<String>,
+}
+
+impl Default for PriceCheckSettings {
+    fn default() -> Self {
+        PriceCheckSettings {
+            enabled: true,
+            hotkey: "Ctrl+D".into(),
+            league: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub town_mute: TownMuteSettings,
+    pub price_check: PriceCheckSettings,
 }
 
 impl Settings {

@@ -1,13 +1,18 @@
+import { useState } from "react";
+import { PricePage } from "./PricePage";
 import { TownMutePage } from "./TownMutePage";
 import "./App.css";
 
 const NAV = [
-  { id: "price", label: "Price check", soon: true },
+  { id: "price", label: "Price check", soon: false },
   { id: "builds", label: "Builds", soon: true },
   { id: "town-mute", label: "Town mute", soon: false },
-];
+] as const;
+
+type Page = (typeof NAV)[number]["id"];
 
 function App() {
+  const [page, setPage] = useState<Page>("price");
   return (
     <div className="shell">
       <nav className="nav">
@@ -15,8 +20,9 @@ function App() {
         {NAV.map((item) => (
           <button
             key={item.id}
-            className={`nav-item ${item.id === "town-mute" ? "active" : ""}`}
+            className={`nav-item ${item.id === page ? "active" : ""}`}
             disabled={item.soon}
+            onClick={() => setPage(item.id)}
           >
             {item.label}
             {item.soon && <span className="soon">Soon</span>}
@@ -24,7 +30,8 @@ function App() {
         ))}
       </nav>
       <main className="main">
-        <TownMutePage />
+        {page === "price" && <PricePage />}
+        {page === "town-mute" && <TownMutePage />}
       </main>
     </div>
   );

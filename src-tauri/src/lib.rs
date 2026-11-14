@@ -2,23 +2,37 @@ mod areas;
 pub mod audio;
 mod client_log;
 mod game;
+mod hotkey;
+pub mod price;
 mod settings;
 mod town_mute;
 
 use audio::Ducker;
+use price::item::Item;
+use price::stats::StatFilter;
+use price::trade::TradeResult;
+use price::{League, PriceCheck, PriceService};
+use serde::Serialize;
 use settings::Settings;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WindowEvent};
+use tauri::{
+    AppHandle, Emitter, Manager, PhysicalPosition, RunEvent, State, WebviewWindow, WindowEvent,
+};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use town_mute::{Status, TownMute};
+
+const PRICE_WINDOW: &str = "price";
 
 struct AppState {
     settings: Arc<Mutex<Settings>>,
     settings_path: PathBuf,
     status: Arc<Mutex<Status>>,
     ducker: Arc<Mutex<Ducker>>,
+    price: Arc<PriceService>,
 }
 
 #[tauri::command]
@@ -38,6 +52,43 @@ fn get_status(state: State<AppState>) -> Status {
     state.status.lock().unwrap().clone()
 }
 
+#[tauri::command]
+async fn get_leagues(state: State<'_, AppState>) -> Result<Vec<League>, String> {
+    state.price.leagues().await
+}
+
+async fn league(state: &AppState) -> String {
+    let chosen = state.settings.lock().unwrap().price_check.league.clone();
+    match chosen {
+        Some(l) if !l.is_empty() => l,
+        _ => state.price.default_league().await,
+    }
+}
+
+#[tauri::command]
+async fn price_check(state: State<'_, AppState>, text: String) -> Result<PriceCheck, String> {
+    let league = league(&state).await;
+    state.price.check(&text, &league).await
+}
+
+#[tauri::command]
+async fn price_search(
+    state: State<'_, AppState>,
+    item: Item,
+    base_type: String,
+    filters: Vec<StatFilter>,
+    league: String,
+) -> Result<TradeResult, String> {
+    state.price.search(&item, &base_type, &filters, &league).await
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PriceRequest {
+    text: Option<String>,
+    error: Option<String>,
+}
+
 fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
@@ -46,16 +97,94 @@ fn show_main(app: &AppHandle) {
     }
 }
 
+/// Puts the overlay beside the cursor, inside the monitor the cursor is on.
+fn place_beside_cursor(window: &WebviewWindow) {
+    let Ok(cursor) = window.cursor_position() else { return };
+    let Ok(size) = window.outer_size() else { return };
+    let monitor = window
+        .monitor_from_point(cursor.x, cursor.y)
+        .ok()
+        .flatten();
+    let (mx, my, mw, mh) = match &monitor {
+        Some(m) => {
+            let a = m.work_area();
+            (a.position.x as f64, a.position.y as f64, a.size.width as f64, a.size.height as f64)
+        }
+        None => (0.0, 0.0, f64::MAX, f64::MAX),
+    };
+    let (w, h) = (size.width as f64, size.height as f64);
+    let gap = 24.0;
+    // Right of the cursor when there is room, else left of it.
+    let mut x = cursor.x + gap;
+    if x + w > mx + mw {
+        x = cursor.x - gap - w;
+    }
+    let x = x.clamp(mx, (mx + mw - w).max(mx));
+    let y = (cursor.y - h / 3.0).clamp(my, (my + mh - h).max(my));
+    let _ = window.set_position(PhysicalPosition::new(x, y));
+}
+
+fn on_price_hotkey(app: AppHandle) {
+    // Not on the hotkey thread: copying waits for the game.
+    std::thread::spawn(move || {
+        let request = match hotkey::copy_item() {
+            Ok(text) => PriceRequest { text: Some(text), error: None },
+            Err(e) => PriceRequest { text: None, error: Some(e) },
+        };
+        let Some(window) = app.get_webview_window(PRICE_WINDOW) else { return };
+        place_beside_cursor(&window);
+        let _ = window.show();
+        let _ = window.set_focus();
+        let _ = window.emit("price-request", request);
+    });
+}
+
+/// Registers the price check hotkey while the game is in front, and only then.
+fn watch_hotkey(app: AppHandle, settings: Arc<Mutex<Settings>>) {
+    let mut registered: Option<Shortcut> = None;
+    loop {
+        let wanted = {
+            let s = settings.lock().unwrap();
+            (s.price_check.enabled && hotkey::game_is_focused())
+                .then(|| s.price_check.hotkey.parse::<Shortcut>().ok())
+                .flatten()
+        };
+        if wanted != registered {
+            let gs = app.global_shortcut();
+            if let Some(old) = registered.take() {
+                let _ = gs.unregister(old);
+            }
+            if let Some(new) = wanted {
+                let handle = app.clone();
+                let ok = gs
+                    .on_shortcut(new, move |_app, _shortcut, event| {
+                        if event.state == ShortcutState::Pressed {
+                            on_price_hotkey(handle.clone());
+                        }
+                    })
+                    .is_ok();
+                if ok {
+                    registered = Some(new);
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
+            let cache_dir = app.path().app_cache_dir()?;
             let settings_path = config_dir.join("settings.json");
             let settings = Arc::new(Mutex::new(Settings::load(&settings_path)));
             let ducker = Arc::new(Mutex::new(Ducker::new(config_dir.join("lowered-volumes.json"))));
             let status = Arc::new(Mutex::new(Status::default()));
+            let price = Arc::new(PriceService::new(cache_dir));
 
             let monitor = TownMute::new(settings.clone(), ducker.clone());
             let handle = app.handle().clone();
@@ -69,11 +198,25 @@ pub fn run() {
                     })
                 })?;
 
+            let handle = app.handle().clone();
+            let hotkey_settings = settings.clone();
+            std::thread::Builder::new()
+                .name("price-hotkey".into())
+                .spawn(move || watch_hotkey(handle, hotkey_settings))?;
+
+            // Warm the caches so the first price check is quick.
+            let warm = price.clone();
+            tauri::async_runtime::spawn(async move {
+                let league = warm.default_league().await;
+                let _ = warm.check("Item Class: Stackable Currency\nRarity: Currency\nChaos Orb", &league).await;
+            });
+
             app.manage(AppState {
                 settings,
                 settings_path,
                 status,
                 ducker,
+                price,
             });
 
             // Keep running in the tray so the mute keeps working with the window closed.
@@ -103,13 +246,25 @@ pub fn run() {
                 .build(app)?;
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
+        .on_window_event(|window, event| match event {
+            WindowEvent::CloseRequested { api, .. } => {
                 let _ = window.hide();
                 api.prevent_close();
             }
+            // The overlay goes away when you click back into the game.
+            WindowEvent::Focused(false) if window.label() == PRICE_WINDOW => {
+                let _ = window.hide();
+            }
+            _ => {}
         })
-        .invoke_handler(tauri::generate_handler![get_settings, set_settings, get_status])
+        .invoke_handler(tauri::generate_handler![
+            get_settings,
+            set_settings,
+            get_status,
+            get_leagues,
+            price_check,
+            price_search
+        ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
