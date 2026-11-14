@@ -33,6 +33,7 @@ base64 = "0.22"
 keyring = { version = "3", features = ["windows-native", "apple-native"] }
 tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
 tauri-plugin-notification = "2"
+tauri-plugin-single-instance = "2"
 arboard = { version = "3", default-features = false }
 sysinfo = { version = "0.40", default-features = false, features = ["system"] }
 
@@ -57,3 +58,6 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

@@ -156,24 +156,7 @@ impl Live {
             .await
             .map_err(|e| if e.contains("POESESSID") { Stop::Fail(e) } else { Stop::Retry(e) })?;
 
-        let url = format!(
-            "wss://www.pathofexile.com/api/trade/live/{}/{}",
-            urlencode_league(&search.league),
-            query_id
-        );
-        let mut request = url.into_client_request().map_err(|e| Stop::Fail(e.to_string()))?;
-        let headers = request.headers_mut();
-        let header = |v: String| v.parse().map_err(|_| Stop::Fail("Bad session value.".into()));
-        headers.insert("Cookie", header(format!("POESESSID={session}"))?);
-        headers.insert("Origin", header(SITE.to_string())?);
-        headers.insert("User-Agent", header(concat!("poe-tool/", env!("CARGO_PKG_VERSION")).to_string())?);
-
-        let (mut socket, _) = tokio_tungstenite::connect_async(request).await.map_err(|e| match e {
-            tungstenite::Error::Http(resp) if matches!(resp.status().as_u16(), 401 | 403) => {
-                Stop::Fail("The trade site didn't accept the session. Check your POESESSID.".into())
-            }
-            e => Stop::Retry(format!("Couldn't connect: {e}")),
-        })?;
+        let mut socket = open_socket(&search.league, &query_id, session).await?;
         self.set_status(&search.id, LiveStatus::Live);
 
         while let Some(msg) = socket.next().await {
@@ -187,20 +170,22 @@ impl Live {
             if event["auth"] == Value::Bool(false) {
                 return Err(Stop::Fail("The trade site didn't accept the session. Check your POESESSID.".into()));
             }
-            let ids: Vec<String> = event["new"]
-                .as_array()
-                .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
-                .unwrap_or_default();
+            let ids = new_listings(&event);
             if ids.is_empty() {
                 continue;
             }
             match self.price.fetch_listings(&ids, &query_id, session).await {
                 Ok(listings) => {
+                    // Still connected: clear a failed fetch's message.
+                    if self.status.lock().unwrap().get(&search.id) != Some(&LiveStatus::Live) {
+                        self.set_status(&search.id, LiveStatus::Live);
+                    }
                     for l in listings {
                         self.hit(group, search, &l);
                     }
                 }
-                Err(e) => self.set_status(&search.id, LiveStatus::Retrying(e)),
+                // The listing is lost, but the feed carries on.
+                Err(e) => self.set_status(&search.id, LiveStatus::Retrying(format!("Missed a listing: {e}"))),
             }
         }
         Err(Stop::Retry("Connection lost.".into()))
@@ -247,6 +232,40 @@ impl Live {
     }
 }
 
+type Socket = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// Connects to a search's live feed, signed in.
+async fn open_socket(league: &str, query_id: &str, session: &str) -> Result<Socket, Stop> {
+    let url = format!("wss://www.pathofexile.com/api/trade/live/{}/{}", urlencode_league(league), query_id);
+    let mut request = url.into_client_request().map_err(|e| Stop::Fail(e.to_string()))?;
+    let headers = request.headers_mut();
+    let header = |v: String| v.parse().map_err(|_| Stop::Fail("Bad session value.".into()));
+    headers.insert("Cookie", header(format!("POESESSID={session}"))?);
+    headers.insert("Origin", header(SITE.to_string())?);
+    headers.insert("User-Agent", header(concat!("poe-tool/", env!("CARGO_PKG_VERSION")).to_string())?);
+
+    let (socket, _) = tokio_tungstenite::connect_async(request).await.map_err(|e| match e {
+        tungstenite::Error::Http(resp) if matches!(resp.status().as_u16(), 401 | 403) => {
+            Stop::Fail("The trade site didn't accept the session. Check your POESESSID.".into())
+        }
+        e => Stop::Retry(format!("Couldn't connect: {e}")),
+    })?;
+    Ok(socket)
+}
+
+/// What a message says is new. The site sends one signed token per new listing
+/// (`{"result": "<token>"}`), which the fetch endpoint takes in place of an id; older
+/// messages carried a list of ids (`{"new": [...]}`).
+fn new_listings(event: &Value) -> Vec<String> {
+    if let Some(token) = event["result"].as_str().filter(|s| !s.is_empty()) {
+        return vec![token.to_string()];
+    }
+    event["new"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+        .unwrap_or_default()
+}
+
 fn now_rfc3339() -> String {
     // Seconds since the epoch, formatted by hand to keep a date crate out.
     let secs = std::time::SystemTime::now()
@@ -281,5 +300,51 @@ mod tests {
     fn dates() {
         assert_eq!(civil_from_days(0), (1970, 1, 1));
         assert_eq!(civil_from_days(20_771), (2026, 11, 14));
+    }
+
+    /// Against the real site: `POESESSID=… LEAGUE=… cargo test live_feed -- --ignored --nocapture`.
+    /// Watches every new pair of boots and fetches the first one that shows up.
+    #[tokio::test]
+    #[ignore]
+    async fn live_feed() {
+        let session = std::env::var("POESESSID").expect("POESESSID");
+        let league = std::env::var("LEAGUE").expect("LEAGUE");
+        let price = PriceService::new(std::env::temp_dir().join("poe-tool-live-test"));
+        println!("account: {:?}", price.account_name(&session).await);
+        let body = serde_json::json!({"query": {"status": {"option": "online"},
+            "filters": {"type_filters": {"filters": {"category": {"option": "armour.boots"}}}}}});
+        let query_id = price.live_search_id(&body, &league, &session).await.unwrap();
+        let mut socket = open_socket(&league, &query_id, &session).await.ok().expect("connect");
+        let ids = tokio::time::timeout(Duration::from_secs(90), async {
+            while let Some(Ok(msg)) = socket.next().await {
+                if let Message::Text(t) = msg {
+                    let event: Value = serde_json::from_str(&t).unwrap();
+                    println!("message: {}", &t[..t.len().min(60)]);
+                    let ids = new_listings(&event);
+                    if !ids.is_empty() {
+                        return ids;
+                    }
+                }
+            }
+            panic!("socket closed")
+        })
+        .await
+        .expect("a new listing within 90 s");
+        let listings = price.fetch_listings(&ids, &query_id, &session).await.unwrap();
+        let l = &listings[0]["listing"];
+        println!(
+            "{} · {} {} · hideout token: {} · whisper token: {}",
+            listings[0]["item"]["typeLine"], l["price"]["amount"], l["price"]["currency"],
+            l["hideout_token"].is_string(), l["whisper_token"].is_string()
+        );
+        assert!(l["hideout_token"].is_string() || l["whisper_token"].is_string() || l["whisper"].is_string());
+    }
+
+    #[test]
+    fn reads_new_listings() {
+        let v = |s: &str| serde_json::from_str::<Value>(s).unwrap();
+        assert_eq!(new_listings(&v(r#"{"result":"a.b.c"}"#)), vec!["a.b.c"]);
+        assert_eq!(new_listings(&v(r#"{"new":["x","y"]}"#)), vec!["x", "y"]);
+        assert!(new_listings(&v(r#"{"auth":true}"#)).is_empty());
     }
 }

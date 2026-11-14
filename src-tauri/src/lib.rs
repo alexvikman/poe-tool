@@ -388,6 +388,9 @@ fn watch_hotkeys(app: AppHandle, settings: Arc<Mutex<Settings>>) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
+        // First: a second start shows this window instead of running a second copy
+        // (two would fight over the hotkeys and the game's volume).
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())

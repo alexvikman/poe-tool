@@ -312,8 +312,16 @@ function SearchRow({
   );
 }
 
+/** How long the site honours a listing's travel or whisper token. */
+const TOKEN_LIFETIME_MS = 5 * 60 * 1000;
+
 function LiveFeed({ hits }: { hits: LiveHit[] }) {
   const [done, setDone] = useState<Record<string, string>>({});
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 10_000);
+    return () => clearInterval(t);
+  }, []);
 
   async function act(hit: LiveHit, token: string, label: string) {
     const key = token;
@@ -333,6 +341,7 @@ function LiveFeed({ hits }: { hits: LiveHit[] }) {
       {hits.map((h, i) => {
         const token = h.hideoutToken ?? h.whisperToken;
         const result = token ? done[token] : undefined;
+        const expired = now - Date.parse(h.seen) > TOKEN_LIFETIME_MS;
         return (
           <div key={i} className="hit">
             <div className="hit-main">
@@ -343,11 +352,15 @@ function LiveFeed({ hits }: { hits: LiveHit[] }) {
               {result && <small className={result.startsWith("Travel") || result.startsWith("Whisper") ? "muted" : "bad"}>{result}</small>}
             </div>
             <div className="hit-price">{h.amount != null ? `${h.amount} ${h.currency}` : "—"}</div>
-            {h.hideoutToken ? (
+            {expired && h.hideoutToken ? (
+              <span className="muted small" title="The site only lets you travel for a few minutes after listing">
+                Expired
+              </span>
+            ) : h.hideoutToken ? (
               <button className="btn primary small-btn" onClick={() => act(h, h.hideoutToken!, "Travelling to hideout")}>
                 Travel to hideout
               </button>
-            ) : h.whisperToken ? (
+            ) : h.whisperToken && !expired ? (
               <button className="btn small-btn" onClick={() => act(h, h.whisperToken!, "Whisper sent")}>
                 Whisper
               </button>

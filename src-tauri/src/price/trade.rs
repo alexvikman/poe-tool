@@ -299,6 +299,7 @@ impl TradeClient {
         let resp = signed_in(http.post(format!("{SITE}/api/trade/whisper")), Some(session))
             .header("Referer", format!("{SITE}/trade/search/{}", urlencode(league)))
             .header("X-Requested-With", "XMLHttpRequest")
+            .header("Accept", "application/json")
             .json(&json!({ "token": token }))
             .send()
             .await

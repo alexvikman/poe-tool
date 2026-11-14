@@ -239,20 +239,21 @@ impl PriceService {
         self.trade.use_listing_token(&self.http, token, league, session).await
     }
 
-    /// The account a session belongs to; an error when the site doesn't accept it.
+    /// The account a session belongs to ("name#1234"); an error when the site doesn't
+    /// accept it. Read from the account page, which answers 401 when signed out.
     pub async fn account_name(&self, session: &str) -> Result<String, String> {
         let resp = self
             .http
-            .get(format!("{}/character-window/get-account-name", trade::SITE))
+            .get(format!("{}/my-account", trade::SITE))
             .header("Cookie", format!("POESESSID={session}"))
             .send()
             .await
             .map_err(|e| format!("Trade site: {e}"))?;
-        let body: serde_json::Value = resp.json().await.map_err(|_| "The site didn't accept this POESESSID.".to_string())?;
-        body["accountName"]
-            .as_str()
-            .map(str::to_string)
-            .ok_or_else(|| "The site didn't accept this POESESSID.".to_string())
+        if !resp.status().is_success() {
+            return Err("The site didn't accept this POESESSID.".into());
+        }
+        let page = resp.text().await.map_err(|e| e.to_string())?;
+        account_from_page(&page).ok_or_else(|| "Signed in, but the account's name wasn't on its page.".into())
     }
 
     async fn stat_index(&self) -> Result<Arc<StatIndex>, String> {
@@ -325,5 +326,35 @@ impl PriceService {
             }
             Err(e) => std::fs::read(&local).map_err(|_| e),
         }
+    }
+}
+
+/// The account in a signed-in page's profile link: `/account/view-profile/name-1234`
+/// → `name#1234`.
+fn account_from_page(page: &str) -> Option<String> {
+    let start = page.find("/account/view-profile/")? + "/account/view-profile/".len();
+    let slug: String = page[start..]
+        .chars()
+        .take_while(|c| !matches!(c, '"' | '\'' | '/' | '?' | '<' | '#'))
+        .collect();
+    let slug = slug.trim();
+    if slug.is_empty() {
+        return None;
+    }
+    Some(match slug.rsplit_once('-') {
+        Some((name, tag)) if !tag.is_empty() && tag.chars().all(|c| c.is_ascii_digit()) => format!("{name}#{tag}"),
+        _ => slug.to_string(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_the_account_from_the_page() {
+        let page = r#"<a href="/account/view-profile/some-name-1875">Profile</a>"#;
+        assert_eq!(account_from_page(page).as_deref(), Some("some-name#1875"));
+        assert_eq!(account_from_page("<html>signed out</html>"), None);
     }
 }
