@@ -19,7 +19,9 @@ cd src-tauri && cargo test
 
 **Price check** (`src-tauri/src/price/`, `src-tauri/src/hotkey.rs`). The hotkey sends one Ctrl+Alt+C, the game's advanced copy, which adds each mod's roll range and tier, and reads the clipboard. `item.rs` parses the text; `stats.rs` matches mod lines to the trade site's stat ids (from `/api/trade/data/stats`, cached for a day); `filters.rs` decides which stats are searched and which start on (equipment properties such as DPS first, then pseudo totals, then the remaining mods, each step covering the mods it uses); `category.rs` maps item classes to trade categories; `trade.rs` searches the trade site, or the currency exchange for bulk items, following the rate limits it sends in `X-Rate-Limit-Ip`; `ninja.rs` reads poe.ninja's `/poe1/api/economy/...` endpoints. Leagues come from `/api/trade/data/leagues`, cached for an hour. Transfigured gems are searched as their base gem plus the trade site's discriminator.
 
-**Saved searches and live search** (`src-tauri/src/searches.rs`, `live.rs`, `session.rs`). Searches are kept in `searches.json` in the app's config folder, grouped by build; a group's id is stable for builds to refer to later. A trade site link imports without any request: the id in it is the query itself, gzip-compressed and base64url-encoded. Live search uses the site's websocket (`wss://www.pathofexile.com/api/trade/live/<league>/<search id>`), which needs the user's POESESSID (kept with `keyring` in Windows Credential Manager); new ids are fetched signed in, which gives the `hideout_token`/`whisper_token` that `POST /api/trade/whisper` takes, as the site's Travel to Hideout and Whisper buttons do. Each watched search reconnects with a growing pause and stops on a refused session.
+**Builds** (`src-tauri/src/builds.rs`, `src/BuildsPage.tsx`, `src/PassiveTree.tsx`). Builds are kept in `builds.json` in the app's config folder, each with its PoB code and, optionally, the id of a group of searches. A code is unpacked (base64url, zlib) and its XML read with `roxmltree`. Item pictures come from poe.ninja and the wiki, gem data from the wiki's Cargo tables, gem colours from PoB's `Gems.lua`, and the passive tree from GGG's skilltree export; all are fetched at once, cached on disk for a week and loaded once per run. Stats for loadouts other than the exported one come from PoE Tool's Path of Building service (`POST /v1/calc/loadouts`): all of a build's loadouts in one request when the build opens, by PoB's own set ids. The service's address and key are added at build time (`POB_SERVICE_URL`, `POB_SERVICE_KEY`).
+
+**Saved searches and live search** (`src-tauri/src/searches.rs`, `live.rs`, `session.rs`). Searches are kept in `searches.json` in the app's config folder, in groups; a group's id is stable for builds to refer to. A trade site link imports without any request: the id in it is the query itself, gzip-compressed and base64url-encoded. Live search uses the site's websocket (`wss://www.pathofexile.com/api/trade/live/<league>/<search id>`), which needs the user's POESESSID (kept with `keyring` in Windows Credential Manager); new ids are fetched signed in, which gives the `hideout_token`/`whisper_token` that `POST /api/trade/whisper` takes, as the site's Travel to Hideout and Whisper buttons do. Each watched search reconnects with a growing pause and stops on a refused session.
 
 **Hotkeys** (`src-tauri/src/lib.rs`). Registered only while the game window is in front, and unregistered when it isn't. A chat command presses Enter, pastes the text with Ctrl+A and Ctrl+V through the clipboard (put back a second later), and presses Enter again.
 
@@ -41,6 +43,22 @@ cd src-tauri && cargo test
 Its chat works like the game's (Enter opens it, Enter sends) and logs what was sent to `chat.log` next to its `Client.txt`. The items in `scripts/items/` use the advanced copy format.
 
 `cargo run --example audio_probe` lists every audio session as `pid volume`. `cargo run --example price_probe -- item.txt` prices an item file and prints the result as JSON; `-- --gem "double strike"` searches transfigured gems.
+
+## Where the time goes
+
+The app writes how long things take to `perf.log` in its config folder (`%APPDATA%\com.poetool.desktop`), one line each, in milliseconds: opening a build (`builds_view`: decode, parse, dress), loading the build data (`build assets`: fetch, items, tree), the tree's layout, every request to the PoB service with the service's own `Server-Timing` (decode, queue, worker, load, calc, switch, stats), and from the page `buildView`, `build shown` (painted), `treeLayout`, `tree pictures loaded` and `tree draw` (frames drawn while moving: count, average, worst). It's kept under 1 MB.
+
+```bash
+cd src-tauri && cargo test --release --lib times_opening_a_build -- --ignored --nocapture
+```
+
+times the backend's part of opening a build with twelve loadouts (`tests/fixtures/build3.code`) and how much goes to the page.
+
+```bash
+cd src-tauri && POB_SERVICE=https://… POB_KEY=… cargo test --lib calculates_every_loadout -- --ignored --nocapture
+```
+
+asks a running service for all twelve loadouts and times it. The service's own benchmark is `scripts/bench.sh` in its repository.
 
 ## Releases and updates
 

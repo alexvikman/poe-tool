@@ -4,6 +4,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { treeLayout, type GearItem, type TreeLayout, type TreeNode, type TreeView } from "./builds";
 import { ItemTooltip } from "./ItemView";
+import { batchTimer, perfNote, timed } from "./perf";
+
+const drawTimes = batchTimer("tree draw");
 
 const MIN_SCALE = 0.02;
 const MAX_SCALE = 1.2;
@@ -48,7 +51,7 @@ export function PassiveTree({
   const frame = useRef(0);
 
   useEffect(() => {
-    treeLayout().then(setLayout, (e) => setError(String(e)));
+    timed("treeLayout", treeLayout(), (l) => `nodes=${l.nodes.length}`).then(setLayout, (e) => setError(String(e)));
   }, []);
 
   const allocated = useMemo(() => new Set(tree.allocated), [tree]);
@@ -97,10 +100,16 @@ export function PassiveTree({
     frame.current = requestAnimationFrame(draw);
   }
 
+  // When every sheet has arrived, how long that took (once per tree shown).
+  const mounted = useRef(performance.now());
+  const sheetsLogged = useRef(false);
+
   function draw() {
     const el = canvas.current;
     const cam = camera.current;
     if (!el || !cam || !shown || !layout) return;
+    const drawStarted = performance.now();
+    let waiting = 0;
     const dpr = window.devicePixelRatio || 1;
     const w = el.clientWidth;
     const h = el.clientHeight;
@@ -123,7 +132,10 @@ export function PassiveTree({
       const at = s?.coords[name];
       if (!s || !at) return false;
       const img = image(s.url, redraw);
-      if (!img) return true;
+      if (!img) {
+        waiting++;
+        return true;
+      }
       const [sx, sy, sw, sh] = at;
       const dw = (sw / zoom) * scale;
       const dh = (sh / zoom) * scale;
@@ -212,6 +224,11 @@ export function PassiveTree({
           sprite("ascendancy", "AscendancyMiddle", n.x, n.y);
           break;
       }
+    }
+    drawTimes(performance.now() - drawStarted);
+    if (waiting === 0 && !sheetsLogged.current) {
+      sheetsLogged.current = true;
+      perfNote(`tree pictures loaded ms=${(performance.now() - mounted.current).toFixed(1)} nodes=${shown.nodes.length} edges=${shown.edges.length}`);
     }
   }
 

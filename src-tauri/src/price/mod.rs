@@ -330,6 +330,11 @@ impl PriceService {
             .map_err(|e| format!("Trade site: {e}"))
     }
 
+    /// `cached_url` with owned names, for building many requests at once.
+    pub async fn cached_url_owned(&self, file: String, url: String, max_age: Duration) -> Result<Vec<u8>, String> {
+        self.cached_url(&file, &url, max_age).await
+    }
+
     /// A file from the web, from the disk cache when fresh, else downloaded; a stale
     /// copy when the download fails.
     pub async fn cached_url(&self, file: &str, url: &str, max_age: Duration) -> Result<Vec<u8>, String> {

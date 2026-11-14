@@ -110,6 +110,9 @@ export const buildView = (id: string) => invoke<BuildView>("builds_view", { id }
 /** One loadout's stats from Path of Building, or why it couldn't be calculated. */
 export interface LoadoutStats {
   stats: Record<string, number> | null;
+  /** The character's level in that loadout. */
+  level: number | null;
+  mainSkill: string | null;
   pobVersion: string | null;
   error: string | null;
 }

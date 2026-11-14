@@ -11,7 +11,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 /// What's kept of an imported build.
@@ -844,6 +844,8 @@ pub fn loadout_pick(view: &BuildView, pick: &Loadout) -> serde_json::Value {
 #[serde(rename_all = "camelCase")]
 pub struct LoadoutStats {
     pub stats: Option<BTreeMap<String, f64>>,
+    pub level: Option<u32>,
+    pub main_skill: Option<String>,
     pub pob_version: Option<String>,
     pub error: Option<String>,
 }
@@ -851,8 +853,8 @@ pub struct LoadoutStats {
 impl From<Result<Calculated, String>> for LoadoutStats {
     fn from(r: Result<Calculated, String>) -> Self {
         match r {
-            Ok(c) => LoadoutStats { stats: Some(c.stats), pob_version: c.pob_version, error: None },
-            Err(e) => LoadoutStats { stats: None, pob_version: None, error: Some(e) },
+            Ok(c) => LoadoutStats { stats: Some(c.stats), level: c.level, main_skill: c.main_skill, pob_version: c.pob_version, error: None },
+            Err(e) => LoadoutStats { stats: None, level: None, main_skill: None, pob_version: None, error: Some(e) },
         }
     }
 }
@@ -865,6 +867,10 @@ pub const LOADOUTS_PER_REQUEST: usize = 24;
 #[serde(rename_all = "camelCase")]
 pub struct Calculated {
     pub stats: BTreeMap<String, f64>,
+    /// The character's level in that loadout, from its points (PoB's auto level).
+    pub level: Option<u32>,
+    /// The loadout's main skill ("Static Strike").
+    pub main_skill: Option<String>,
     /// The PoB version the service runs ("2.67.2").
     pub pob_version: Option<String>,
 }
@@ -897,7 +903,15 @@ pub async fn calculate_loadouts(
     code: &str,
     picks: &[serde_json::Value],
 ) -> Result<Vec<Result<Calculated, String>>, String> {
-    let body = call_service(http, url, key, agent, "/v1/calc/loadouts", serde_json::json!({ "code": code, "loadouts": picks })).await?;
+    let started = std::time::Instant::now();
+    let (body, timing) = call_service(http, url, key, agent, "/v1/calc/loadouts", serde_json::json!({ "code": code, "loadouts": picks })).await?;
+    crate::perf::note(&format!(
+        "pob loadouts={} total={:.1} code_kb={} server: {}",
+        picks.len(),
+        started.elapsed().as_secs_f64() * 1000.0,
+        code.len() / 1024,
+        timing.unwrap_or_default()
+    ));
     let pob_version = body["pobVersion"].as_str().map(str::to_string);
     Ok(body["results"]
         .as_array()
@@ -913,12 +927,15 @@ pub async fn calculate_loadouts(
                 .flatten()
                 .filter_map(|s| Some((s["stat"].as_str()?.to_string(), s["value"].as_f64()?)))
                 .collect();
-            Ok(Calculated { stats, pob_version: pob_version.clone() })
+            let level = r["build"]["level"].as_u64().map(|l| l as u32);
+            let main_skill = r["build"]["mainSkill"]["name"].as_str().map(str::to_string);
+            Ok(Calculated { stats, level, main_skill, pob_version: pob_version.clone() })
         })
         .collect())
 }
 
 /// Posts to the PoB service, waiting out a busy service or rate limit a couple of times.
+/// Its answer, and where the service says its time went (`Server-Timing`).
 async fn call_service(
     http: &reqwest::Client,
     url: &str,
@@ -926,7 +943,7 @@ async fn call_service(
     agent: &str,
     path: &str,
     body: serde_json::Value,
-) -> Result<serde_json::Value, String> {
+) -> Result<(serde_json::Value, Option<String>), String> {
     let mut tries = 0;
     let resp = loop {
         let mut req = http
@@ -949,6 +966,7 @@ async fn call_service(
         break resp;
     };
     let status = resp.status();
+    let timing = resp.headers().get("server-timing").and_then(|v| v.to_str().ok()).map(str::to_string);
     // Only the service answers in JSON; Cloudflare's own errors are text or a web page.
     let is_json = resp
         .headers()
@@ -962,7 +980,7 @@ async fn call_service(
     if !is_json {
         return Err("The PoB service isn't available right now.".into());
     }
-    Ok(body)
+    Ok((body, timing))
 }
 
 /// How long a 429 or 503 asks to wait (`Retry-After`, in seconds), within reason.
@@ -991,7 +1009,7 @@ fn service_error(status: u16, message: Option<&str>) -> String {
 /// Item pictures, gem colours and the passive tree's names, fetched once a week.
 #[derive(Default)]
 pub struct BuildAssets {
-    loaded: Mutex<Option<Arc<Assets>>>,
+    loaded: tokio::sync::OnceCell<Arc<Assets>>,
 }
 
 #[derive(Default)]
@@ -1055,13 +1073,9 @@ impl BuildAssets {
         self.get(price).await.layout.clone()
     }
 
+    /// Loaded once, by the first caller; others asking meanwhile wait for it.
     async fn get(&self, price: &PriceService) -> Arc<Assets> {
-        if let Some(a) = self.loaded.lock().unwrap().clone() {
-            return a;
-        }
-        let assets = Arc::new(load_assets(price).await);
-        *self.loaded.lock().unwrap() = Some(assets.clone());
-        assets
+        self.loaded.get_or_init(|| async { Arc::new(load_assets(price).await) }).await.clone()
     }
 
     /// Fills in pictures, gem colours and the tree's names. What can't be fetched is
@@ -1195,16 +1209,7 @@ async fn load_wiki_gems(price: &PriceService) -> HashMap<String, WikiGem> {
         "items.name=name,items.required_level=level,items.inventory_icon=icon",
         "items.class_id IN ('Active Skill Gem','Support Skill Gem')",
         4,
-    )
-    .await;
-    for r in items {
-        let Some(name) = text(&r["name"]) else { continue };
-        gems.entry(name).or_insert_with(|| WikiGem {
-            icon: text(&r["icon"]).map(|f| wiki_file(f.trim_start_matches("File:"))),
-            required_level: text(&r["level"]).and_then(|l| l.parse().ok()),
-            rewards: Vec::new(),
-        });
-    }
+    );
     let vendor = rows(
         "vendor_rewards",
         "vendor_rewards._pageName=item,vendor_rewards.act=act,vendor_rewards.npc=npc,vendor_rewards.quest=quest,vendor_rewards.classes__full=classes",
@@ -1217,7 +1222,17 @@ async fn load_wiki_gems(price: &PriceService) -> HashMap<String, WikiGem> {
         "quest_rewards.act>0",
         4,
     );
-    for (r, sold) in vendor.await.into_iter().map(|r| (r, true)).chain(quest.await.into_iter().map(|r| (r, false))) {
+    // The three tables at once.
+    let (items, vendor, quest) = futures::join!(items, vendor, quest);
+    for r in items {
+        let Some(name) = text(&r["name"]) else { continue };
+        gems.entry(name).or_insert_with(|| WikiGem {
+            icon: text(&r["icon"]).map(|f| wiki_file(f.trim_start_matches("File:"))),
+            required_level: text(&r["level"]).and_then(|l| l.parse().ok()),
+            rewards: Vec::new(),
+        });
+    }
+    for (r, sold) in vendor.into_iter().map(|r| (r, true)).chain(quest.into_iter().map(|r| (r, false))) {
         let (Some(item), Some(act), Some(quest)) = (text(&r["item"]), text(&r["act"]).and_then(|a| a.parse().ok()), text(&r["quest"])) else { continue };
         let Some(gem) = gems.get_mut(&item) else { continue };
         let npc = if sold { text(&r["npc"]) } else { None };
@@ -1249,37 +1264,46 @@ fn wiki_page(page: &str) -> String {
 }
 
 async fn load_assets(price: &PriceService) -> Assets {
+    let mut span = crate::perf::Span::new("build assets");
     let mut a = Assets::default();
-    let json = |bytes: Result<Vec<u8>, String>| bytes.ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
-    for kind in ["UniqueWeapon", "UniqueArmour", "UniqueAccessory", "UniqueFlask", "UniqueJewel"] {
-        let file = format!("ninja-{kind}.json");
-        if let Some(v) = json(price.cached_url(&file, &format!("{NINJA}{kind}"), WEEK).await) {
-            for line in v["lines"].as_array().into_iter().flatten() {
-                if let (Some(name), Some(icon)) = (line["name"].as_str(), line["icon"].as_str()) {
-                    a.uniques.entry(name.to_string()).or_insert_with(|| icon.to_string());
+    let json = |bytes: &Result<Vec<u8>, String>| bytes.as_ref().ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(b).ok());
+    // Everything at once: from the cache files, or from the sites once a week.
+    let ninja_kinds = ["UniqueWeapon", "UniqueArmour", "UniqueAccessory", "UniqueFlask", "UniqueJewel", "BaseType", "ClusterJewel"];
+    let (ninja, trade_items, gems_lua, tree, wiki) = futures::join!(
+        futures::future::join_all(ninja_kinds.map(|kind| price.cached_url_owned(format!("ninja-{kind}.json"), format!("{NINJA}{kind}"), WEEK))),
+        price.trade_data("items"),
+        price.cached_url("pob-gems.lua", GEMS, WEEK),
+        price.cached_url("passive-tree.json", TREE, WEEK),
+        load_wiki_gems(price),
+    );
+    span.mark("fetch");
+    for (kind, bytes) in ninja_kinds.iter().zip(&ninja) {
+        let Some(v) = json(bytes) else { continue };
+        for line in v["lines"].as_array().into_iter().flatten() {
+            match *kind {
+                "BaseType" => {
+                    if let (Some(name), Some(icon)) = (line["name"].as_str(), line["icon"].as_str()) {
+                        a.bases.entry(name.to_string()).or_insert_with(|| icon.to_string());
+                    }
                 }
-            }
-        }
-    }
-    if let Some(v) = json(price.cached_url("ninja-BaseType.json", &format!("{NINJA}BaseType"), WEEK).await) {
-        for line in v["lines"].as_array().into_iter().flatten() {
-            if let (Some(name), Some(icon)) = (line["name"].as_str(), line["icon"].as_str()) {
-                a.bases.entry(name.to_string()).or_insert_with(|| icon.to_string());
-            }
-        }
-    }
-    // Cluster jewels aren't base types there; their own list has the bases' pictures.
-    if let Some(v) = json(price.cached_url("ninja-ClusterJewel.json", &format!("{NINJA}ClusterJewel"), WEEK).await) {
-        for line in v["lines"].as_array().into_iter().flatten() {
-            if let (Some(base), Some(icon)) = (line["baseType"].as_str(), line["icon"].as_str()) {
-                a.bases.entry(base.to_string()).or_insert_with(|| icon.to_string());
+                // Cluster jewels aren't base types there; their own list has the bases' pictures.
+                "ClusterJewel" => {
+                    if let (Some(base), Some(icon)) = (line["baseType"].as_str(), line["icon"].as_str()) {
+                        a.bases.entry(base.to_string()).or_insert_with(|| icon.to_string());
+                    }
+                }
+                _ => {
+                    if let (Some(name), Some(icon)) = (line["name"].as_str(), line["icon"].as_str()) {
+                        a.uniques.entry(name.to_string()).or_insert_with(|| icon.to_string());
+                    }
+                }
             }
         }
     }
     // The trade site's list has every base and unique, also those poe.ninja hasn't seen.
     let mut bases: HashSet<String> = a.bases.keys().cloned().collect();
     let mut uniques: HashSet<String> = a.uniques.keys().cloned().collect();
-    if let Ok(groups) = price.trade_data("items").await {
+    if let Ok(groups) = trade_items {
         let gear = ["accessory", "armour", "flask", "jewel", "weapon", "graft", "tincture"];
         for g in groups.as_array().into_iter().flatten().filter(|g| gear.contains(&g["id"].as_str().unwrap_or(""))) {
             for e in g["entries"].as_array().into_iter().flatten() {
@@ -1299,14 +1323,17 @@ async fn load_assets(price: &PriceService) -> Assets {
     a.base_names.sort_by_key(|b| std::cmp::Reverse(b.len()));
     a.unique_names = uniques.into_iter().collect();
     a.unique_names.sort_by_key(|u| std::cmp::Reverse(u.len()));
-    if let Ok(bytes) = price.cached_url("pob-gems.lua", GEMS, WEEK).await {
+    if let Ok(bytes) = gems_lua {
         a.gem_colours = gem_colours(&String::from_utf8_lossy(&bytes));
     }
-    if let Some(v) = json(price.cached_url("passive-tree.json", TREE, WEEK).await) {
+    span.mark("items");
+    if let Some(v) = json(&tree) {
         a.tree = tree_index(&v);
         a.layout = tree_layout(&v);
     }
-    a.gems = load_wiki_gems(price).await;
+    span.mark("tree");
+    a.gems = wiki;
+    span.done();
     a
 }
 
@@ -1818,6 +1845,45 @@ mod tests {
         assert_eq!(pick("Lvl 12-32 (Static Strike)"), serde_json::json!({ "spec": 2, "itemSet": 7, "skillSet": 10, "configSet": 5 }));
     }
 
+    /// Where opening a build spends its time on this side: unpacking the code, reading
+    /// the XML, the pictures and data (from the disk cache, then from memory), and how
+    /// much goes over to the page.
+    /// `cargo test --release --lib times_opening_a_build -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore]
+    async fn times_opening_a_build() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build3.code");
+        let code = std::fs::read_to_string(path).unwrap();
+        let ms = |t: std::time::Instant| format!("{:>7.1} ms", t.elapsed().as_secs_f64() * 1000.0);
+        let t = std::time::Instant::now();
+        let xml = decode(&code).unwrap();
+        println!("decode            {}  ({} KB code → {} KB XML)", ms(t), code.len() / 1024, xml.len() / 1024);
+        let t = std::time::Instant::now();
+        let mut view = parse(&xml).unwrap();
+        println!("parse             {}", ms(t));
+        let price = PriceService::new(std::env::temp_dir().join("poe-tool-build-test"));
+        let assets = BuildAssets::default();
+        let t = std::time::Instant::now();
+        assets.dress(&price, &mut view).await;
+        println!("dress, first      {}  (loads pictures and data from the cache files)", ms(t));
+        let mut again = parse(&xml).unwrap();
+        let t = std::time::Instant::now();
+        assets.dress(&price, &mut again).await;
+        println!("dress, again      {}", ms(t));
+        let t = std::time::Instant::now();
+        let json = serde_json::to_string(&view).unwrap();
+        println!("view to JSON      {}  ({} KB)", ms(t), json.len() / 1024);
+        let t = std::time::Instant::now();
+        let layout = assets.layout(&price).await;
+        let json = serde_json::to_string(&layout).unwrap();
+        println!("tree to JSON      {}  ({} KB)", ms(t), json.len() / 1024);
+        let sizes: Vec<_> = [("gear", serde_json::to_string(&view.item_sets).unwrap().len()), ("gems", serde_json::to_string(&view.skill_sets).unwrap().len()), ("trees", serde_json::to_string(&view.trees).unwrap().len()), ("notes", view.notes.len()), ("code", view.code.len())]
+            .iter()
+            .map(|(k, n)| format!("{k} {} KB", n / 1024))
+            .collect();
+        println!("view parts        {}", sizes.join(", "));
+    }
+
     /// Against a running service, every loadout of a build with twelve, timed:
     /// `POB_SERVICE=https://… POB_KEY=… cargo test --lib calculates_every_loadout -- --ignored --nocapture`
     #[tokio::test]
@@ -1884,13 +1950,15 @@ mod tests {
                 "200 OK",
                 "application/json",
                 "",
-                r#"{"pobVersion":"2.67.2","results":[{"playerStats":[{"stat":"Life","value":4809}]},{"error":{"code":"invalid_loadout","message":"no item set 9"}}]}"#,
+                r#"{"pobVersion":"2.67.2","results":[{"build":{"level":96,"mainSkill":{"name":"Cyclone of Tumult"}},"playerStats":[{"stat":"Life","value":4809}]},{"error":{"code":"invalid_loadout","message":"no item set 9"}}]}"#,
             ),
         ]);
         let picks = [serde_json::json!({}), serde_json::json!({ "itemSet": 9 })];
         let r = calculate_loadouts(&reqwest::Client::new(), &url, "", "PoE-Tool/test", "code", &picks).await.unwrap();
         assert_eq!(r[0].as_ref().unwrap().stats.get("Life"), Some(&4809.0));
         assert_eq!(r[0].as_ref().unwrap().pob_version.as_deref(), Some("2.67.2"));
+        assert_eq!(r[0].as_ref().unwrap().level, Some(96));
+        assert_eq!(r[0].as_ref().unwrap().main_skill.as_deref(), Some("Cyclone of Tumult"));
         assert_eq!(r[1].as_ref().unwrap_err(), "PoB couldn't calculate it: no item set 9");
     }
 

@@ -1,6 +1,7 @@
 mod areas;
 pub mod audio;
 mod builds;
+mod perf;
 mod client_log;
 mod game;
 mod hotkey;
@@ -398,18 +399,36 @@ async fn builds_import(state: State<'_, AppState>, input: String) -> Result<Stri
 /// A build as the Builds page shows it.
 #[tauri::command]
 async fn builds_view(state: State<'_, AppState>, id: String) -> Result<builds::BuildView, String> {
+    let mut span = perf::Span::new("builds_view");
     let saved = state.builds.lock().unwrap().get(&id)?.clone();
-    let mut view = builds::parse(&builds::decode(&saved.code)?)?;
+    let xml = builds::decode(&saved.code)?;
+    span.mark("decode");
+    let mut view = builds::parse(&xml)?;
+    span.mark("parse");
     view.code = saved.code;
     view.source = saved.source;
     state.build_assets.dress(&state.price, &mut view).await;
+    span.mark("dress");
+    span.note(format!("xml_kb={}", xml.len() / 1024));
+    span.done();
     Ok(view)
 }
 
 /// The passive tree as it's drawn, the same for every build.
 #[tauri::command]
 async fn builds_tree(state: State<'_, AppState>) -> Result<builds::TreeLayout, String> {
-    Ok(state.build_assets.layout(&state.price).await)
+    let mut span = perf::Span::new("builds_tree");
+    let layout = state.build_assets.layout(&state.price).await;
+    span.mark("layout");
+    span.note(format!("nodes={}", layout.nodes.len()));
+    span.done();
+    Ok(layout)
+}
+
+/// A line for the performance log from the page: how long something took there.
+#[tauri::command]
+fn perf_note(line: String) {
+    perf::note(&format!("page {}", line.chars().take(500).collect::<String>()));
 }
 
 /// Stats for loadouts of a build, from PoE Tool's Path of Building service: each
@@ -708,6 +727,7 @@ pub fn run() {
             let price = Arc::new(PriceService::new(cache_dir));
             // First, before anything slow: the windows already exist and their pages
             // call the commands as soon as they load.
+            perf::init(config_dir.clone());
             let mut search_store = SearchStore::load(config_dir.join("searches.json"));
             let mut build_store = builds::BuildStore::load(config_dir.join("builds.json"));
             // Builds used to live on groups of searches; they have their own list now.
@@ -831,6 +851,7 @@ pub fn run() {
             builds_import,
             builds_view,
             builds_tree,
+            perf_note,
             builds_update,
             builds_remove,
             builds_calc,

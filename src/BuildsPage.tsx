@@ -17,6 +17,7 @@ import {
 import { addGroup, listGroups, type HitItem, type SearchGroup } from "./searches";
 import { HoverCard, ItemPicture, ItemTooltip } from "./ItemView";
 import { PassiveTree } from "./PassiveTree";
+import { perfNote, timed } from "./perf";
 
 function remembered(): string | null {
   try {
@@ -194,11 +195,14 @@ function Build({
       setCalcs((c) => ({ ...c, [key]: calc }));
     };
     for (const p of wanted) store(setsKey(p), { busy: true });
-    calcLoadouts(build.id, wanted).then(
+    timed(`page calcLoadouts n=${wanted.length}`, calcLoadouts(build.id, wanted)).then(
       (results) =>
         wanted.forEach((p, i) => {
           const r = results[i];
-          store(setsKey(p), r?.stats ? { busy: false, stats: r.stats, version: r.pobVersion } : { busy: false, error: r?.error ?? "No answer." });
+          store(
+            setsKey(p),
+            r?.stats ? { busy: false, stats: r.stats, level: r.level, mainSkill: r.mainSkill, version: r.pobVersion } : { busy: false, error: r?.error ?? "No answer." },
+          );
         }),
       (e) => wanted.forEach((p) => store(setsKey(p), { busy: false, error: String(e) })),
     );
@@ -223,10 +227,13 @@ function Build({
   }, [sel]);
 
   useEffect(() => {
-    buildView(build.id).then(
+    const started = performance.now();
+    timed("buildView", buildView(build.id)).then(
       (v) => {
         setView(v);
         setSel(v.active);
+        // Drawn once the browser has painted it.
+        requestAnimationFrame(() => setTimeout(() => perfNote(`build shown ms=${(performance.now() - started).toFixed(1)}`)));
       },
       (e) => setError(String(e)),
     );
@@ -251,7 +258,7 @@ function Build({
       <header className="build-head">
         <div className="build-title-line">
           <h1>
-            Level {view.level} {view.mainSkill ? `${view.mainSkill} ` : ""}
+            Level {calc?.level ?? view.level} {(calc?.mainSkill ?? view.mainSkill) ? `${calc?.mainSkill ?? view.mainSkill} ` : ""}
             {view.ascendancy ?? view.class}
           </h1>
           {view.version && <span className="build-version">{view.version.replace("_", ".")}</span>}
@@ -376,6 +383,8 @@ const calcCache = new Map<string, Calc>();
 interface Calc {
   busy: boolean;
   stats?: Record<string, number>;
+  level?: number | null;
+  mainSkill?: string | null;
   version?: string | null;
   error?: string;
 }
