@@ -37,6 +37,27 @@ pub struct ItemGroup {
 pub struct ItemEntry {
     #[serde(rename = "type")]
     pub base: String,
+    /// For a transfigured gem, its name ("Cold Snap of Power"); `base` is then the gem
+    /// it comes from and `disc` tells the trade site which version.
+    pub text: Option<String>,
+    pub disc: Option<String>,
+}
+
+/// `GET /api/trade/data/static`: bulk items and their ids on the currency exchange.
+#[derive(Debug, Deserialize)]
+pub struct StaticResponse {
+    pub result: Vec<StaticGroup>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StaticGroup {
+    pub entries: Vec<StaticEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StaticEntry {
+    pub id: String,
+    pub text: Option<String>,
 }
 
 /// One filter of a trade search, shown to the user as a row they can turn on or off.
@@ -64,6 +85,10 @@ pub struct StatIndex {
     /// (trade group, text template) → stat id
     by_text: HashMap<(String, String), String>,
     bases: Vec<String>,
+    /// Transfigured gem name (lower case) → (base gem, discriminator).
+    transfigured: HashMap<String, (String, String)>,
+    /// Bulk item name (lower case) → its id on the currency exchange ("divine").
+    exchange_ids: HashMap<String, String>,
 }
 
 const WEAPON_OR_ARMOUR: &[&str] = &[
@@ -99,7 +124,33 @@ impl StatIndex {
             .collect();
         // Longest first, so "Two-Toned Boots" wins over "Boots"-like shorter names.
         bases.sort_by_key(|b| std::cmp::Reverse(b.len()));
-        StatIndex { by_text, bases }
+        let transfigured = items
+            .result
+            .iter()
+            .flat_map(|g| &g.entries)
+            .filter_map(|e| Some((e.text.as_ref()?.to_lowercase(), (e.base.clone(), e.disc.clone()?))))
+            .collect();
+        StatIndex { by_text, bases, transfigured, exchange_ids: HashMap::new() }
+    }
+
+    pub fn with_exchange(mut self, statics: &StaticResponse) -> Self {
+        self.exchange_ids = statics
+            .result
+            .iter()
+            .flat_map(|g| &g.entries)
+            .filter_map(|e| Some((e.text.as_ref()?.to_lowercase(), e.id.clone())))
+            .collect();
+        self
+    }
+
+    /// The currency exchange's id for a bulk item, such as "divine" for Divine Orb.
+    pub fn exchange_id(&self, name: &str) -> Option<String> {
+        self.exchange_ids.get(&name.to_lowercase()).cloned()
+    }
+
+    /// For a transfigured gem: its base gem and the trade site's discriminator.
+    pub fn transfigured(&self, name: &str) -> Option<(String, String)> {
+        self.transfigured.get(&name.to_lowercase()).cloned()
     }
 
     /// The base type of an item: rares and uniques say it on their second line,
@@ -343,7 +394,8 @@ mod tests {
         )
         .unwrap();
         let items: ItemsResponse = serde_json::from_str(
-            r#"{"result":[{"entries":[{"type":"Two-Toned Boots"},{"type":"Ruby Ring"},{"type":"Ring"}]}]}"#,
+            r#"{"result":[{"entries":[{"type":"Two-Toned Boots"},{"type":"Ruby Ring"},{"type":"Ring"},
+              {"type":"Cold Snap"},{"type":"Cold Snap","text":"Cold Snap of Power","disc":"alt_x"}]}]}"#,
         )
         .unwrap();
         StatIndex::new(&stats, &items)
@@ -420,6 +472,13 @@ Something the site doesn't know",
                 ("", false, None),
             ]
         );
+    }
+
+    #[test]
+    fn knows_transfigured_gems() {
+        let idx = index();
+        assert_eq!(idx.transfigured("Cold Snap of Power"), Some(("Cold Snap".into(), "alt_x".into())));
+        assert_eq!(idx.transfigured("Cold Snap"), None);
     }
 
     #[test]

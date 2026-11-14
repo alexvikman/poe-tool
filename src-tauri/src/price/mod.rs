@@ -8,7 +8,7 @@ pub mod trade;
 use item::{Item, Rarity};
 use ninja::{GemFamily, NinjaIndex, NinjaPrice};
 use serde::{Deserialize, Serialize};
-use stats::{ItemsResponse, StatFilter, StatIndex, StatsResponse};
+use stats::{ItemsResponse, StatFilter, StatIndex, StaticResponse, StatsResponse};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -133,19 +133,11 @@ impl PriceService {
         };
         let options = SearchOptions::for_item(&item);
 
-        // Bulk items have a good poe.ninja price; spend trade requests on the rest.
-        let search = match item.rarity {
-            Rarity::Rare | Rarity::Magic | Rarity::Normal | Rarity::Unique => true,
-            Rarity::Gem => ninja.is_empty(),
-            _ => ninja.is_empty(),
-        };
-        let (trade, trade_error) = if search {
-            match self.search(&item, &base_type, &filters, &options, league).await {
-                Ok(r) => (Some(r), None),
-                Err(e) => (None, Some(e)),
-            }
-        } else {
-            (None, None)
+        // Every item gets live listings: bulk items from the currency exchange, the rest
+        // from the item search.
+        let (trade, trade_error) = match self.search(&item, &base_type, &filters, &options, league).await {
+            Ok(r) => (Some(r), None),
+            Err(e) => (None, Some(e)),
         };
 
         Ok(PriceCheck {
@@ -180,7 +172,27 @@ impl PriceService {
         options: &SearchOptions,
         league: &str,
     ) -> Result<TradeResult, String> {
-        let query = trade::build_query(item, base_type, filters, options);
+        let stats = self.stat_index().await?;
+        // Bulk items: the currency exchange, paid in chaos or divines.
+        if let Some(want) = stats.exchange_id(&item.type_line).filter(|_| {
+            !matches!(item.rarity, Rarity::Rare | Rarity::Magic | Rarity::Unique | Rarity::Gem | Rarity::Normal)
+        }) {
+            let have: Vec<&str> = ["chaos", "divine"].into_iter().filter(|h| *h != want).collect();
+            let divine_chaos = self.ninja_index(league).await.map(|i| i.divine_chaos).unwrap_or(0.0);
+            return self
+                .trade
+                .exchange(&self.http, league, &want, &have, divine_chaos, options.instant_buyout)
+                .await;
+        }
+        let gem = if item.rarity == Rarity::Gem {
+            stats.transfigured(&item.type_line)
+        } else {
+            None
+        };
+        let query = match &gem {
+            Some((base, disc)) => trade::build_query(item, base, Some(disc), filters, options),
+            None => trade::build_query(item, base_type, None, filters, options),
+        };
         self.trade.search(&self.http, league, query).await
     }
 
@@ -193,7 +205,9 @@ impl PriceService {
         let items = self.cached("items.json", "/api/trade/data/items", TRADE_DATA_MAX_AGE).await?;
         let stats: StatsResponse = serde_json::from_slice(&stats).map_err(|e| e.to_string())?;
         let items: ItemsResponse = serde_json::from_slice(&items).map_err(|e| e.to_string())?;
-        let index = Arc::new(StatIndex::new(&stats, &items));
+        let statics = self.cached("static.json", "/api/trade/data/static", TRADE_DATA_MAX_AGE).await?;
+        let statics: StaticResponse = serde_json::from_slice(&statics).map_err(|e| e.to_string())?;
+        let index = Arc::new(StatIndex::new(&stats, &items).with_exchange(&statics));
         *guard = Some(index.clone());
         Ok(index)
     }

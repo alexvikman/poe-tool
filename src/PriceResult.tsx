@@ -90,7 +90,7 @@ export function PriceResult({ check }: { check: PriceCheck }) {
   const title = item.rarity === "rare" || item.rarity === "unique" ? item.name : item.typeLine;
   const showBase =
     ["rare", "unique", "magic"].includes(item.rarity) && check.baseType !== title;
-  const bulk = ["currency", "divinationCard"].includes(item.rarity) && check.ninja.length > 0;
+  const bulk = trade?.exchange ?? ["currency", "divinationCard", "other"].includes(item.rarity);
   const enabledCount = filters.filter((f) => f.enabled && f.id).length;
   const best = check.ninja[0];
 
@@ -156,32 +156,30 @@ export function PriceResult({ check }: { check: PriceCheck }) {
       )}
       {check.ninjaError && <p className="bad small">{check.ninjaError}</p>}
 
-      {!bulk && (
-        <div className="chips">
-          {filters.length > 0 && (
-            <span className="chip static">
-              {enabledCount} of {filters.length} stats
-            </span>
-          )}
-          <button
-            className={`chip ${options.corrupted != null ? "on" : ""}`}
-            onClick={() =>
-              updateOptions({
-                corrupted: options.corrupted === null ? false : options.corrupted === false ? true : null,
-              })
-            }
-            title="Click to change"
-          >
-            {options.corrupted === null ? "Corrupted: any" : options.corrupted ? "Corrupted" : "Not corrupted"}
-          </button>
-          <button
-            className={`chip ${options.instantBuyout ? "on" : ""}`}
-            onClick={() => updateOptions({ instantBuyout: !options.instantBuyout })}
-          >
-            Instant buyout only
-          </button>
-        </div>
-      )}
+      <div className="chips">
+        {filters.length > 0 && (
+          <span className="chip static">
+            {enabledCount} of {filters.length} stats
+          </span>
+        )}
+        {!bulk && <button
+          className={`chip ${options.corrupted != null ? "on" : ""}`}
+          onClick={() =>
+            updateOptions({
+              corrupted: options.corrupted === null ? false : options.corrupted === false ? true : null,
+            })
+          }
+          title="Click to change"
+        >
+          {options.corrupted === null ? "Corrupted: any" : options.corrupted ? "Corrupted" : "Not corrupted"}
+        </button>}
+        <button
+          className={`chip ${options.instantBuyout ? "on" : ""}`}
+          onClick={() => updateOptions({ instantBuyout: !options.instantBuyout })}
+        >
+          Instant buyout only
+        </button>
+      </div>
 
       {filters.length > 0 && (
         <section className="filters">
@@ -201,46 +199,48 @@ export function PriceResult({ check }: { check: PriceCheck }) {
         </section>
       )}
 
-      {!bulk && (
-        <section className="trade">
-          <div className="trade-head">
-            <div className="section-label">
-              {searching ? "Searching…" : trade ? `Matched: ${trade.total}` : "Trade"}
-            </div>
-            <button className="btn" onClick={openTrade} title="Open this search on pathofexile.com">
-              Trade ↗
-            </button>
+      <section className="trade">
+        <div className="trade-head">
+          <div className="section-label">
+            {searching
+              ? "Searching…"
+              : trade
+                ? `Matched: ${trade.total}`
+                : "Trade"}
           </div>
-          {tradeError && <p className="bad small">{tradeError}</p>}
-          {trade && trade.listings.length === 0 && !searching && (
-            <p className="muted small">Nothing listed. Try turning some stats off.</p>
-          )}
-          {trade && trade.listings.length > 0 && (
-            <table className={`listings ${searching ? "stale" : ""}`}>
-              <thead>
-                <tr>
-                  <th>Price</th>
-                  <th>Listed</th>
-                  <th>ilvl</th>
-                  <th>Seller</th>
+          <button className="btn" onClick={openTrade} title="Open this search on pathofexile.com">
+            Trade ↗
+          </button>
+        </div>
+        {tradeError && <p className="bad small">{tradeError}</p>}
+        {trade && trade.listings.length === 0 && !searching && (
+          <p className="muted small">Nothing listed. Try turning some stats off.</p>
+        )}
+        {trade && trade.listings.length > 0 && (
+          <table className={`listings ${searching ? "stale" : ""}`}>
+            <thead>
+              <tr>
+                <th>{trade.exchange ? "Price each" : "Price"}</th>
+                <th>Listed</th>
+                <th>{trade.exchange ? "Stock" : "ilvl"}</th>
+                <th>Seller</th>
+              </tr>
+            </thead>
+            <tbody>
+              {trade.listings.map((l, i) => (
+                <tr key={i}>
+                  <td className="listing-price">{formatListingPrice(l)}</td>
+                  <td>{timeAgo(l.indexed)} ago</td>
+                  <td className="muted">{trade.exchange ? l.stock ?? "" : l.itemLevel ?? ""}</td>
+                  <td className="listing-account" title={l.account}>
+                    {l.account}
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {trade.listings.map((l, i) => (
-                  <tr key={i}>
-                    <td className="listing-price">{formatListingPrice(l)}</td>
-                    <td>{timeAgo(l.indexed)} ago</td>
-                    <td className="muted">{l.itemLevel ?? ""}</td>
-                    <td className="listing-account" title={l.account}>
-                      {l.account}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </section>
-      )}
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
     </div>
   );
 }

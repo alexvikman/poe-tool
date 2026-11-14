@@ -36,6 +36,8 @@ impl SearchOptions {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TradeResult {
+    /// From the currency exchange (bulk items): prices are per item, with stock.
+    pub exchange: bool,
     pub total: u32,
     pub url: String,
     pub listings: Vec<Listing>,
@@ -50,6 +52,8 @@ pub struct Listing {
     pub account: String,
     pub item_level: Option<u32>,
     pub corrupted: bool,
+    /// Exchange listings: how many the seller has.
+    pub stock: Option<u32>,
 }
 
 /// Follows the limits the site sends in `X-Rate-Limit-Ip` (`max:period:penalty,…`),
@@ -128,6 +132,7 @@ fn parse_rules(header: &str) -> Vec<(usize, Duration)> {
 pub struct TradeClient {
     search_limit: Mutex<RateLimiter>,
     fetch_limit: Mutex<RateLimiter>,
+    exchange_limit: Mutex<RateLimiter>,
 }
 
 impl TradeClient {
@@ -135,7 +140,74 @@ impl TradeClient {
         TradeClient {
             search_limit: Mutex::new(RateLimiter::new(vec![(5, Duration::from_secs(10))])),
             fetch_limit: Mutex::new(RateLimiter::new(vec![(12, Duration::from_secs(4))])),
+            exchange_limit: Mutex::new(RateLimiter::new(vec![(5, Duration::from_secs(15))])),
         }
+    }
+
+    /// Offers on the currency exchange for one bulk item (`want`, an exchange id such
+    /// as "the-doctor"), paid in any of `have` ("chaos", "divine"), cheapest first.
+    /// `divine_chaos` (chaos per divine) ranks offers in different currencies.
+    pub async fn exchange(
+        &self,
+        http: &reqwest::Client,
+        league: &str,
+        want: &str,
+        have: &[&str],
+        divine_chaos: f64,
+        instant_buyout: bool,
+    ) -> Result<TradeResult, String> {
+        if let Some(wait) = self.exchange_limit.lock().unwrap().acquire() {
+            return Err(rate_limited(wait));
+        }
+        let status = if instant_buyout { "securable" } else { "online" };
+        let query = json!({
+            "query": { "status": { "option": status }, "have": have, "want": [want] },
+            "sort": { "have": "asc" },
+            "engine": "new",
+        });
+        let url = format!("{SITE}/api/trade/exchange/{}", urlencode(league));
+        let resp = http.post(url).json(&query).send().await.map_err(net_error)?;
+        self.exchange_limit.lock().unwrap().update(resp.headers());
+        let resp = check_status(resp).await?;
+        let found: ExchangeResponse = resp.json().await.map_err(net_error)?;
+        // An object of listings by id, or an empty list when there are none.
+        let entries: Vec<ExchangeResultEntry> = match found.result {
+            Value::Object(map) => map
+                .into_iter()
+                .filter_map(|(_, v)| serde_json::from_value(v).ok())
+                .collect(),
+            _ => Vec::new(),
+        };
+        let mut listings: Vec<Listing> = entries
+            .into_iter()
+            .filter_map(|r| {
+                let offer = r.listing.offers.into_iter().next()?;
+                if offer.item.amount <= 0.0 {
+                    return None;
+                }
+                Some(Listing {
+                    amount: offer.exchange.amount / offer.item.amount,
+                    currency: offer.exchange.currency,
+                    indexed: r.listing.indexed,
+                    account: r.listing.account.name,
+                    item_level: None,
+                    corrupted: false,
+                    stock: offer.item.stock,
+                })
+            })
+            .collect();
+        let in_chaos = |l: &Listing| match l.currency.as_str() {
+            "divine" if divine_chaos > 0.0 => l.amount * divine_chaos,
+            _ => l.amount,
+        };
+        listings.sort_by(|a, b| in_chaos(a).total_cmp(&in_chaos(b)));
+        listings.truncate(SHOW_COUNT);
+        Ok(TradeResult {
+            exchange: true,
+            total: found.total,
+            url: format!("{SITE}/trade/exchange/{}/{}", urlencode(league), found.id),
+            listings,
+        })
     }
 
     pub async fn search(
@@ -182,10 +254,12 @@ impl TradeClient {
                     account: r.listing.account.name,
                     item_level: r.item.ilvl,
                     corrupted: r.item.corrupted.unwrap_or(false),
+                    stock: None,
                 })
             }));
         }
         Ok(TradeResult {
+            exchange: false,
             total: found.total,
             url: site_url,
             listings,
@@ -236,6 +310,39 @@ struct SearchResponse {
 }
 
 #[derive(Deserialize)]
+struct ExchangeResponse {
+    id: String,
+    total: u32,
+    #[serde(default)]
+    result: Value,
+}
+
+#[derive(Deserialize)]
+struct ExchangeResultEntry {
+    listing: ExchangeListing,
+}
+
+#[derive(Deserialize)]
+struct ExchangeListing {
+    indexed: String,
+    account: FetchAccount,
+    offers: Vec<ExchangeOffer>,
+}
+
+#[derive(Deserialize)]
+struct ExchangeOffer {
+    exchange: ExchangeSide,
+    item: ExchangeSide,
+}
+
+#[derive(Deserialize)]
+struct ExchangeSide {
+    currency: String,
+    amount: f64,
+    stock: Option<u32>,
+}
+
+#[derive(Deserialize)]
 struct FetchResponse {
     result: Vec<Option<FetchResult>>,
 }
@@ -271,7 +378,15 @@ struct FetchItem {
 }
 
 /// The search for items like this one. `filters` are the stat rows the user left on.
-pub fn build_query(item: &Item, base_type: &str, filters: &[StatFilter], options: &SearchOptions) -> Value {
+/// `discriminator`: for a transfigured gem, which version of `base_type` (the trade
+/// site lists "Cold Snap of Power" as Cold Snap, alt_x).
+pub fn build_query(
+    item: &Item,
+    base_type: &str,
+    discriminator: Option<&str>,
+    filters: &[StatFilter],
+    options: &SearchOptions,
+) -> Value {
     let status = if options.instant_buyout { "securable" } else { "available" };
     let mut query = json!({
         "status": { "option": status },
@@ -283,7 +398,10 @@ pub fn build_query(item: &Item, base_type: &str, filters: &[StatFilter], options
             query["type"] = json!(base_type);
         }
         Rarity::Gem => {
-            query["type"] = json!(item.type_line);
+            query["type"] = match discriminator {
+                Some(d) => json!({ "option": base_type, "discriminator": d }),
+                None => json!(item.type_line),
+            };
             if let Some(level) = item.gem_level {
                 misc.insert("gem_level".into(), json!({ "min": level }));
             }
@@ -380,7 +498,7 @@ mod tests {
                 tier: None,
             },
         ];
-        let q = build_query(&item, "Two-Toned Boots", &filters, &SearchOptions::for_item(&item));
+        let q = build_query(&item, "Two-Toned Boots", None, &filters, &SearchOptions::for_item(&item));
         assert_eq!(q["query"]["status"]["option"], "available");
         assert!(q["query"]["filters"]["misc_filters"].is_null());
         assert_eq!(q["query"]["type"], "Two-Toned Boots");
@@ -400,10 +518,22 @@ mod tests {
         let mut options = SearchOptions::for_item(&item);
         assert_eq!(options.corrupted, Some(false));
         options.instant_buyout = true;
-        let q = build_query(&item, "Heavy Belt", &[], &options);
+        let q = build_query(&item, "Heavy Belt", None, &[], &options);
         assert_eq!(q["query"]["name"], "Belt of the Deceiver");
         assert_eq!(q["query"]["status"]["option"], "securable");
         assert_eq!(q["query"]["filters"]["misc_filters"]["filters"]["corrupted"]["option"], false);
+    }
+
+    #[test]
+    fn query_for_a_transfigured_gem_uses_the_discriminator() {
+        let item = super::super::item::parse(
+            "Item Class: Skill Gems\nRarity: Gem\nCold Snap of Power\n--------\nLevel: 1\nQuality: +18% (augmented)",
+        )
+        .unwrap();
+        let q = build_query(&item, "Cold Snap", Some("alt_x"), &[], &SearchOptions::for_item(&item));
+        assert_eq!(q["query"]["type"], json!({ "option": "Cold Snap", "discriminator": "alt_x" }));
+        assert_eq!(q["query"]["filters"]["misc_filters"]["filters"]["gem_level"]["min"], 1);
+        assert_eq!(q["query"]["filters"]["misc_filters"]["filters"]["quality"]["min"], 18);
     }
 
     #[test]

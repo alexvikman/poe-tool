@@ -82,9 +82,13 @@ export interface Listing {
   account: string;
   itemLevel: number | null;
   corrupted: boolean;
+  /** Exchange listings: how many the seller has. */
+  stock: number | null;
 }
 
 export interface TradeResult {
+  /** From the currency exchange: prices are per item, with stock. */
+  exchange: boolean;
   total: number;
   url: string;
   listings: Listing[];
