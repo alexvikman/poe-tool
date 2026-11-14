@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   buildView,
-  calcLoadout,
+  calcLoadouts,
   importBuild,
   listBuilds,
   removeBuild,
@@ -185,19 +185,42 @@ function Build({
   // Stats PoB calculated for other loadouts, by their sets.
   const [calcs, setCalcs] = useState<Record<string, Calc>>({});
 
-  // Another loadout: ask PoB for its stats (once per combination of sets).
-  useEffect(() => {
-    if (!view || !sel) return;
-    const a = view.active;
-    if (sel.itemSet === a.itemSet && sel.skillSet === a.skillSet && sel.tree === a.tree && sel.config === a.config) return;
-    const key = `${sel.itemSet}-${sel.skillSet}-${sel.tree}-${sel.config}`;
-    if (calcs[key]) return;
-    setCalcs((c) => ({ ...c, [key]: { busy: true } }));
-    calcLoadout(build.id, sel).then(
-      (r) => setCalcs((c) => ({ ...c, [key]: { busy: false, stats: r.stats, version: r.pobVersion } })),
-      (e) => setCalcs((c) => ({ ...c, [key]: { busy: false, error: String(e) } })),
+  // Asks PoB for loadouts' stats, all in one go, and keeps them for this build.
+  function calculate(picks: Loadout[]) {
+    const wanted = picks.filter((p) => !calcs[setsKey(p)] && !calcCache.get(`${build.id}|${setsKey(p)}`));
+    if (wanted.length === 0) return;
+    const store = (key: string, calc: Calc) => {
+      if (!calc.busy && !calc.error) calcCache.set(`${build.id}|${key}`, calc);
+      setCalcs((c) => ({ ...c, [key]: calc }));
+    };
+    for (const p of wanted) store(setsKey(p), { busy: true });
+    calcLoadouts(build.id, wanted).then(
+      (results) =>
+        wanted.forEach((p, i) => {
+          const r = results[i];
+          store(setsKey(p), r?.stats ? { busy: false, stats: r.stats, version: r.pobVersion } : { busy: false, error: r?.error ?? "No answer." });
+        }),
+      (e) => wanted.forEach((p) => store(setsKey(p), { busy: false, error: String(e) })),
     );
-  }, [view, sel]);
+  }
+
+  // The build's loadouts are calculated as soon as it's open, so switching is instant;
+  // a mix of sets of its own when it's chosen.
+  useEffect(() => {
+    if (!view) return;
+    const known: Record<string, Calc> = {};
+    for (const l of view.loadouts) {
+      const hit = calcCache.get(`${build.id}|${setsKey(l)}`);
+      if (hit) known[setsKey(l)] = hit;
+    }
+    setCalcs((c) => ({ ...known, ...c }));
+    calculate(view.loadouts.filter((l) => !sameSets(l, view.active) && !known[setsKey(l)]));
+  }, [view]);
+
+  useEffect(() => {
+    if (!view || !sel || sameSets(sel, view.active)) return;
+    if (!view.loadouts.some((l) => sameSets(l, sel))) calculate([sel]);
+  }, [sel]);
 
   useEffect(() => {
     buildView(build.id).then(
@@ -219,13 +242,8 @@ function Build({
   const loadoutAt = view.loadouts.findIndex(
     (l) => l.itemSet === sel.itemSet && l.skillSet === sel.skillSet && l.tree === sel.tree && l.config === sel.config,
   );
-  const exported =
-    sel.itemSet === view.active.itemSet &&
-    sel.skillSet === view.active.skillSet &&
-    sel.tree === view.active.tree &&
-    sel.config === view.active.config;
-  const key = `${sel.itemSet}-${sel.skillSet}-${sel.tree}-${sel.config}`;
-  const calc = exported ? undefined : calcs[key];
+  const exported = sameSets(sel, view.active);
+  const calc = exported ? undefined : (calcs[setsKey(sel)] ?? calcCache.get(`${build.id}|${setsKey(sel)}`));
   const stats = exported ? view.stats : (calc?.stats ?? view.stats);
 
   return (
@@ -348,6 +366,11 @@ function Build({
     </div>
   );
 }
+
+const setsKey = (l: Loadout) => `${l.itemSet}-${l.skillSet}-${l.tree}-${l.config}`;
+const sameSets = (a: Loadout, b: Loadout) => setsKey(a) === setsKey(b);
+/** Loadouts PoB calculated, by build and sets, while the app runs. */
+const calcCache = new Map<string, Calc>();
 
 /** Stats PoB calculated for one combination of sets. */
 interface Calc {

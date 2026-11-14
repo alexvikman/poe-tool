@@ -412,19 +412,30 @@ async fn builds_tree(state: State<'_, AppState>) -> Result<builds::TreeLayout, S
     Ok(state.build_assets.layout(&state.price).await)
 }
 
-/// Stats for a build with these sets chosen, from PoE Tool's Path of Building service.
+/// Stats for loadouts of a build, from PoE Tool's Path of Building service: each
+/// loadout's stats, or why it couldn't be calculated. The service loads the build once
+/// for all of them.
 #[tauri::command]
-async fn builds_calc(app: AppHandle, state: State<'_, AppState>, id: String, pick: builds::Loadout) -> Result<builds::Calculated, String> {
+async fn builds_calc(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    picks: Vec<builds::Loadout>,
+) -> Result<Vec<builds::LoadoutStats>, String> {
     let url = builds::SERVICE_URL
         .filter(|u| !u.trim().is_empty())
         .ok_or("This copy of PoE Tool can't calculate other loadouts: it was built without Path of Building's service.")?;
     let key = builds::SERVICE_KEY.unwrap_or_default();
     let agent = format!("PoE-Tool/{}", app.package_info().version);
     let code = state.builds.lock().unwrap().get(&id)?.code.clone();
-    let xml = builds::decode(&code)?;
-    let view = builds::parse(&xml)?;
-    let xml = builds::with_sets(&xml, &view, &pick);
-    builds::calculate(state.price.http(), url, key, &agent, &xml).await
+    let view = builds::parse(&builds::decode(&code)?)?;
+    let mut out = Vec::with_capacity(picks.len());
+    for chunk in picks.chunks(builds::LOADOUTS_PER_REQUEST) {
+        let wanted: Vec<_> = chunk.iter().map(|p| builds::loadout_pick(&view, p)).collect();
+        let results = builds::calculate_loadouts(state.price.http(), url, key, &agent, &code, &wanted).await?;
+        out.extend(results.into_iter().map(builds::LoadoutStats::from));
+    }
+    Ok(out)
 }
 
 /// Renames a build, or with `set_searches` points it at a group of searches (none

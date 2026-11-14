@@ -819,43 +819,46 @@ fn read_config(set: &roxmltree::Node) -> Vec<String> {
 
 /* Stats for other loadouts, from Path of Building */
 
-/// The build's XML with these sets chosen, as if picked in PoB: what PoB then
-/// calculates is that loadout.
-pub fn with_sets(xml: &str, view: &BuildView, pick: &Loadout) -> String {
-    let mut xml = xml.to_string();
-    if let Some(id) = view.item_sets.get(pick.item_set).and_then(|s| s.id.as_deref()) {
-        xml = set_attr(&xml, "Items", "activeItemSet", id);
+/// A loadout as the PoB service takes it: PoB's own ids for the sets (the tree by its
+/// place in the list, from 1). One the build doesn't name stays as it was saved.
+pub fn loadout_pick(view: &BuildView, pick: &Loadout) -> serde_json::Value {
+    let id = |id: Option<&Option<String>>| id.and_then(|i| i.as_deref()).and_then(|i| i.parse::<u32>().ok());
+    let mut out = serde_json::Map::new();
+    if !view.trees.is_empty() {
+        out.insert("spec".into(), (pick.tree as u32 + 1).into());
     }
-    if let Some(id) = view.skill_sets.get(pick.skill_set).and_then(|s| s.id.as_deref()) {
-        xml = set_attr(&xml, "Skills", "activeSkillSet", id);
+    for (key, value) in [
+        ("itemSet", id(view.item_sets.get(pick.item_set).map(|s| &s.id))),
+        ("skillSet", id(view.skill_sets.get(pick.skill_set).map(|s| &s.id))),
+        ("configSet", id(view.configs.get(pick.config).map(|s| &s.id))),
+    ] {
+        if let Some(v) = value {
+            out.insert(key.into(), v.into());
+        }
     }
-    if view.trees.len() > 1 {
-        xml = set_attr(&xml, "Tree", "activeSpec", &(pick.tree + 1).to_string());
-    }
-    if let Some(id) = view.configs.get(pick.config).and_then(|s| s.id.as_deref()) {
-        xml = set_attr(&xml, "Config", "activeConfigSet", id);
-    }
-    xml
+    serde_json::Value::Object(out)
 }
 
-/// Sets an attribute on the first `<tag …>` element, adding it when missing.
-fn set_attr(xml: &str, tag: &str, attr: &str, value: &str) -> String {
-    let Some(start) = [format!("<{tag} "), format!("<{tag}>")].iter().filter_map(|t| xml.find(t.as_str())).min() else {
-        return xml.to_string();
-    };
-    let end = start + xml[start..].find('>').unwrap_or(0);
-    let open = &xml[start..end];
-    let needle = format!(" {attr}=\"");
-    let new_open = match open.find(&needle) {
-        Some(at) => {
-            let from = at + needle.len();
-            let to = from + open[from..].find('"').unwrap_or(0);
-            format!("{}{}{}", &open[..from], value, &open[to..])
-        }
-        None => format!("{} {attr}=\"{value}\"", open.trim_end_matches('/')) + if open.ends_with('/') { "/" } else { "" },
-    };
-    format!("{}{}{}", &xml[..start], new_open, &xml[end..])
+/// One loadout's stats from the service, or why it couldn't be calculated.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadoutStats {
+    pub stats: Option<BTreeMap<String, f64>>,
+    pub pob_version: Option<String>,
+    pub error: Option<String>,
 }
+
+impl From<Result<Calculated, String>> for LoadoutStats {
+    fn from(r: Result<Calculated, String>) -> Self {
+        match r {
+            Ok(c) => LoadoutStats { stats: Some(c.stats), pob_version: c.pob_version, error: None },
+            Err(e) => LoadoutStats { stats: None, pob_version: None, error: Some(e) },
+        }
+    }
+}
+
+/// Most loadouts the service calculates in one request.
+pub const LOADOUTS_PER_REQUEST: usize = 24;
 
 /// Stats from the Path of Building service, as PoB lists them in an export.
 #[derive(Debug, Clone, Serialize)]
@@ -868,7 +871,7 @@ pub struct Calculated {
 
 /// Where Path of Building calculations run: PoE Tool's own service, its address added
 /// when the app is built (the `POB_SERVICE_URL` variable), so it can move without a
-/// change here. A setting can point elsewhere (a local copy, for testing).
+/// change here.
 pub const SERVICE_URL: Option<&str> = option_env!("POB_SERVICE_URL");
 
 /// The service's key for this release, added when the app is built (the
@@ -882,17 +885,56 @@ const SERVICE_MAX_WAIT: Duration = Duration::from_secs(20);
 /// The wait when a 429 or 503 doesn't say (Cloudflare's own block lasts 10 seconds).
 const SERVICE_DEFAULT_WAIT: Duration = Duration::from_secs(10);
 
-/// Asks the PoB service for a build's stats. `agent` names the app and its version
+/// Asks the PoB service for loadouts of a build (its PoB code, and each loadout as
+/// `loadout_pick` gives it): the build is loaded once there and switched between, as in
+/// PoB. Each loadout's stats, or why it failed. `agent` names the app and its version
 /// ("PoE-Tool/0.1.30"), as the service logs it.
-pub async fn calculate(http: &reqwest::Client, url: &str, key: &str, agent: &str, xml: &str) -> Result<Calculated, String> {
+pub async fn calculate_loadouts(
+    http: &reqwest::Client,
+    url: &str,
+    key: &str,
+    agent: &str,
+    code: &str,
+    picks: &[serde_json::Value],
+) -> Result<Vec<Result<Calculated, String>>, String> {
+    let body = call_service(http, url, key, agent, "/v1/calc/loadouts", serde_json::json!({ "code": code, "loadouts": picks })).await?;
+    let pob_version = body["pobVersion"].as_str().map(str::to_string);
+    Ok(body["results"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|r| {
+            if let Some(message) = r["error"]["message"].as_str() {
+                return Err(format!("PoB couldn't calculate it: {message}"));
+            }
+            let stats = r["playerStats"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|s| Some((s["stat"].as_str()?.to_string(), s["value"].as_f64()?)))
+                .collect();
+            Ok(Calculated { stats, pob_version: pob_version.clone() })
+        })
+        .collect())
+}
+
+/// Posts to the PoB service, waiting out a busy service or rate limit a couple of times.
+async fn call_service(
+    http: &reqwest::Client,
+    url: &str,
+    key: &str,
+    agent: &str,
+    path: &str,
+    body: serde_json::Value,
+) -> Result<serde_json::Value, String> {
     let mut tries = 0;
     let resp = loop {
         let mut req = http
-            .post(format!("{}/v1/calc", url.trim_end_matches('/')))
+            .post(format!("{}{path}", url.trim_end_matches('/')))
             .header(reqwest::header::USER_AGENT, agent)
             // The first calculation on a fresh service waits for PoB to start.
             .timeout(Duration::from_secs(90))
-            .json(&serde_json::json!({ "code": xml }));
+            .json(&body);
         if !key.trim().is_empty() {
             req = req.bearer_auth(key.trim());
         }
@@ -920,13 +962,7 @@ pub async fn calculate(http: &reqwest::Client, url: &str, key: &str, agent: &str
     if !is_json {
         return Err("The PoB service isn't available right now.".into());
     }
-    let stats = body["playerStats"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|s| Some((s["stat"].as_str()?.to_string(), s["value"].as_f64()?)))
-        .collect();
-    Ok(Calculated { stats, pob_version: body["pobVersion"].as_str().map(str::to_string) })
+    Ok(body)
 }
 
 /// How long a 429 or 503 asks to wait (`Retry-After`, in seconds), within reason.
@@ -1774,45 +1810,34 @@ mod tests {
     }
 
     #[test]
-    fn chooses_sets_in_the_xml() {
-        let xml = r#"<PathOfBuilding><Items activeItemSet="2" x="1"/><Skills activeSkillSet="1"></Skills><Tree activeSpec="1"></Tree><Config></Config></PathOfBuilding>"#;
-        assert_eq!(set_attr(xml, "Items", "activeItemSet", "5"), xml.replace(r#"activeItemSet="2""#, r#"activeItemSet="5""#));
-        let added = set_attr(xml, "Config", "activeConfigSet", "3");
-        assert!(added.contains(r#"<Config activeConfigSet="3">"#), "{added}");
-        let self_closing = set_attr(r#"<a><Items x="1"/></a>"#, "Items", "activeItemSet", "4");
-        assert_eq!(self_closing, r#"<a><Items x="1" activeItemSet="4"/></a>"#);
+    fn names_loadouts_by_pob_ids() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build3.code");
+        let view = parse(&decode(&std::fs::read_to_string(path).unwrap()).unwrap()).unwrap();
+        let pick = |title: &str| loadout_pick(&view, view.loadouts.iter().find(|l| l.title == title).unwrap());
+        assert_eq!(pick("Lvl 1-12 (Spectral Throw)"), serde_json::json!({ "spec": 1, "itemSet": 5, "skillSet": 7, "configSet": 3 }));
+        assert_eq!(pick("Lvl 12-32 (Static Strike)"), serde_json::json!({ "spec": 2, "itemSet": 7, "skillSet": 10, "configSet": 5 }));
     }
 
-    #[test]
-    fn picks_a_loadout_in_the_xml() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build2.code");
-        let Ok(code) = std::fs::read_to_string(path) else { return };
-        let xml = decode(&code).unwrap();
-        let view = parse(&xml).unwrap();
-        let first = view.loadouts[0].clone();
-        let picked = parse(&with_sets(&xml, &view, &first)).unwrap();
-        assert_eq!(picked.active, first);
-    }
-
-    /// Against a running service: `POB_SERVICE=http://localhost:18090 POB_KEY=… cargo test calculates_loadouts -- --ignored --nocapture`.
+    /// Against a running service, every loadout of a build with twelve, timed:
+    /// `POB_SERVICE=https://… POB_KEY=… cargo test --lib calculates_every_loadout -- --ignored --nocapture`
     #[tokio::test]
     #[ignore]
-    async fn calculates_loadouts() {
+    async fn calculates_every_loadout() {
         let url = std::env::var("POB_SERVICE").expect("POB_SERVICE");
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build2.code");
-        let xml = decode(&std::fs::read_to_string(path).unwrap()).unwrap();
-        let view = parse(&xml).unwrap();
         let key = std::env::var("POB_KEY").unwrap_or_default();
-        let http = reqwest::Client::new();
-        for pick in [&view.active, &view.loadouts[0]] {
-            let c = calculate(&http, &url, &key, "PoE-Tool/test", &with_sets(&xml, &view, pick)).await.unwrap();
-            println!(
-                "{:<28} Life {:>6} ES {:>5} FullDPS {:>12} CombinedDPS {:>12} (PoB {:?})",
-                pick.title, c.stats.get("Life").copied().unwrap_or(0.0), c.stats.get("EnergyShield").copied().unwrap_or(0.0),
-                c.stats.get("FullDPS").copied().unwrap_or(0.0).round(), c.stats.get("CombinedDPS").copied().unwrap_or(0.0).round(), c.pob_version
-            );
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build3.code");
+        let code = std::fs::read_to_string(path).unwrap().trim().to_string();
+        let view = parse(&decode(&code).unwrap()).unwrap();
+        let picks: Vec<_> = view.loadouts.iter().map(|l| loadout_pick(&view, l)).collect();
+        let started = std::time::Instant::now();
+        let results = calculate_loadouts(&reqwest::Client::new(), &url, &key, "PoE-Tool/test", &code, &picks).await.unwrap();
+        println!("{} loadouts in {} ms ({} KB sent)", picks.len(), started.elapsed().as_millis(), code.len() / 1024);
+        for (l, r) in view.loadouts.iter().zip(&results) {
+            let c = r.as_ref().unwrap();
+            println!("{:<40} Life {:>6} FullDPS {:>12}", l.title, c.stats.get("Life").copied().unwrap_or(0.0), c.stats.get("FullDPS").copied().unwrap_or(0.0).round());
         }
-        println!("exported: Life {:?} FullDPS {:?}", view.stats.get("Life"), view.stats.get("FullDPS"));
+        let at = view.loadouts.iter().position(|l| *l == view.active).unwrap();
+        assert_eq!(results[at].as_ref().unwrap().stats.get("Life"), view.stats.get("Life"));
     }
 
     /// A server that gives these answers in turn, one per connection.
@@ -1855,16 +1880,24 @@ mod tests {
     async fn waits_out_cloudflares_limit() {
         let url = fake_service(vec![
             answer("429 Too Many Requests", "text/plain", "Retry-After: 0\r\n", "error code: 1015"),
-            answer("200 OK", "application/json", "", r#"{"pobVersion":"2.67.2","playerStats":[{"stat":"Life","value":4809}]}"#),
+            answer(
+                "200 OK",
+                "application/json",
+                "",
+                r#"{"pobVersion":"2.67.2","results":[{"playerStats":[{"stat":"Life","value":4809}]},{"error":{"code":"invalid_loadout","message":"no item set 9"}}]}"#,
+            ),
         ]);
-        let c = calculate(&reqwest::Client::new(), &url, "", "PoE-Tool/test", "<PathOfBuilding/>").await.unwrap();
-        assert_eq!(c.stats.get("Life"), Some(&4809.0));
+        let picks = [serde_json::json!({}), serde_json::json!({ "itemSet": 9 })];
+        let r = calculate_loadouts(&reqwest::Client::new(), &url, "", "PoE-Tool/test", "code", &picks).await.unwrap();
+        assert_eq!(r[0].as_ref().unwrap().stats.get("Life"), Some(&4809.0));
+        assert_eq!(r[0].as_ref().unwrap().pob_version.as_deref(), Some("2.67.2"));
+        assert_eq!(r[1].as_ref().unwrap_err(), "PoB couldn't calculate it: no item set 9");
     }
 
     #[tokio::test]
     async fn says_unavailable_for_cloudflare_pages() {
         let url = fake_service(vec![answer("502 Bad Gateway", "text/html", "", "<html>bad gateway</html>")]);
-        let e = calculate(&reqwest::Client::new(), &url, "", "PoE-Tool/test", "<PathOfBuilding/>").await.unwrap_err();
+        let e = calculate_loadouts(&reqwest::Client::new(), &url, "", "PoE-Tool/test", "code", &[serde_json::json!({})]).await.unwrap_err();
         assert_eq!(e, "The PoB service isn't available right now.");
     }
 

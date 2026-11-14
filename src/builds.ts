@@ -107,9 +107,14 @@ export const listBuilds = () => invoke<SavedBuild[]>("builds_list");
  *  after it. Resolves to its id. */
 export const importBuild = (input: string) => invoke<string>("builds_import", { input });
 export const buildView = (id: string) => invoke<BuildView>("builds_view", { id });
-/** Stats from Path of Building for a build with these sets chosen. */
-export const calcLoadout = (id: string, pick: Loadout) =>
-  invoke<{ stats: Record<string, number>; pobVersion: string | null }>("builds_calc", { id, pick });
+/** One loadout's stats from Path of Building, or why it couldn't be calculated. */
+export interface LoadoutStats {
+  stats: Record<string, number> | null;
+  pobVersion: string | null;
+  error: string | null;
+}
+/** Stats from Path of Building for loadouts of a build, in the order asked. */
+export const calcLoadouts = (id: string, picks: Loadout[]) => invoke<LoadoutStats[]>("builds_calc", { id, picks });
 /** Renames a build, or sets the group of searches it uses (null for none). */
 export const updateBuild = (id: string, change: { name?: string; searches?: string | null }) =>
   invoke<void>("builds_update", {
