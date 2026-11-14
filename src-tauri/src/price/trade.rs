@@ -413,6 +413,7 @@ pub fn build_query(
     discriminator: Option<&str>,
     filters: &[StatFilter],
     options: &SearchOptions,
+    league: &str,
 ) -> Value {
     let status = if options.instant_buyout { "securable" } else { "available" };
     let mut query = json!({
@@ -421,8 +422,16 @@ pub fn build_query(
     let mut misc = serde_json::Map::new();
     match item.rarity {
         Rarity::Unique => {
-            query["name"] = json!(item.name);
-            query["type"] = json!(base_type);
+            // Foulborn and Vestigial uniques are their own versions on the site.
+            let name = item.name.as_deref().unwrap_or_default();
+            let foulborn = name.strip_prefix("Foulborn ");
+            let vestigial = base_type.strip_prefix("Vestigial ");
+            query["name"] = json!(foulborn.unwrap_or(name));
+            query["type"] = json!(vestigial.unwrap_or(base_type));
+            misc.insert("foulborn_item".into(), json!({ "option": foulborn.is_some() }));
+            if vestigial.is_none() {
+                misc.insert("vestigial".into(), json!({ "option": false }));
+            }
         }
         Rarity::Gem => {
             query["type"] = match discriminator {
@@ -444,6 +453,18 @@ pub fn build_query(
             }
             if let Some(ilvl) = options.item_level.as_ref().filter(|l| l.enabled) {
                 misc.insert("ilvl".into(), json!({ "min": ilvl.value }));
+            }
+            // An item that can still be crafted on is compared with others like it:
+            // not fractured, mirrored or split (split only matters outside Standard).
+            if !item.corrupted && !item.mirrored {
+                if !item.fractured {
+                    misc.insert("fractured_item".into(), json!({ "option": false }));
+                }
+                misc.insert("mirrored".into(), json!({ "option": false }));
+                let plain = !item.synthesised && !item.fractured && item.influences.is_empty();
+                if plain && league != "Standard" {
+                    misc.insert("split".into(), json!({ "option": false }));
+                }
             }
         }
         _ => query["type"] = json!(item.type_line),
@@ -561,13 +582,16 @@ mod tests {
                 hidden: false,
             },
         ];
-        let q = build_query(&item, "Two-Toned Boots", None, &filters, &SearchOptions::for_item(&item, false));
+        let q = build_query(&item, "Two-Toned Boots", None, &filters, &SearchOptions::for_item(&item, false), "Covens");
         assert_eq!(q["query"]["status"]["option"], "available");
         // Rares search their category, not their base, and not corrupted ones.
         assert!(q["query"]["type"].is_null());
         assert_eq!(q["query"]["filters"]["type_filters"]["filters"]["category"]["option"], "armour.boots");
         assert_eq!(q["query"]["filters"]["misc_filters"]["filters"]["corrupted"]["option"], false);
         assert!(q["query"]["filters"]["misc_filters"]["filters"]["ilvl"].is_null());
+        assert_eq!(q["query"]["filters"]["misc_filters"]["filters"]["fractured_item"]["option"], false);
+        assert_eq!(q["query"]["filters"]["misc_filters"]["filters"]["mirrored"]["option"], false);
+        assert_eq!(q["query"]["filters"]["misc_filters"]["filters"]["split"]["option"], false);
         assert_eq!(q["query"]["filters"]["weapon_filters"]["filters"]["dps"]["min"], 237.0);
         assert_eq!(q["query"]["filters"]["type_filters"]["filters"]["rarity"]["option"], "nonunique");
         assert_eq!(
@@ -585,10 +609,22 @@ mod tests {
         let mut options = SearchOptions::for_item(&item, false);
         assert_eq!(options.corrupted, Some(false));
         options.instant_buyout = true;
-        let q = build_query(&item, "Heavy Belt", None, &[], &options);
+        let q = build_query(&item, "Heavy Belt", None, &[], &options, "Covens");
         assert_eq!(q["query"]["name"], "Belt of the Deceiver");
         assert_eq!(q["query"]["status"]["option"], "securable");
         assert_eq!(q["query"]["filters"]["misc_filters"]["filters"]["corrupted"]["option"], false);
+        assert_eq!(q["query"]["filters"]["misc_filters"]["filters"]["foulborn_item"]["option"], false);
+    }
+
+    #[test]
+    fn query_for_a_foulborn_unique_uses_its_plain_name() {
+        let item = super::super::item::parse(
+            "Item Class: Belts\nRarity: Unique\nFoulborn Belt of the Deceiver\nHeavy Belt\n--------\nItem Level: 84",
+        )
+        .unwrap();
+        let q = build_query(&item, "Heavy Belt", None, &[], &SearchOptions::for_item(&item, false), "Covens");
+        assert_eq!(q["query"]["name"], "Belt of the Deceiver");
+        assert_eq!(q["query"]["filters"]["misc_filters"]["filters"]["foulborn_item"]["option"], true);
     }
 
     #[test]
@@ -597,7 +633,7 @@ mod tests {
             "Item Class: Skill Gems\nRarity: Gem\nCold Snap of Power\n--------\nLevel: 1\nQuality: +18% (augmented)",
         )
         .unwrap();
-        let q = build_query(&item, "Cold Snap", Some("alt_x"), &[], &SearchOptions::for_item(&item, false));
+        let q = build_query(&item, "Cold Snap", Some("alt_x"), &[], &SearchOptions::for_item(&item, false), "Covens");
         assert_eq!(q["query"]["type"], json!({ "option": "Cold Snap", "discriminator": "alt_x" }));
         assert_eq!(q["query"]["filters"]["misc_filters"]["filters"]["gem_level"]["min"], 1);
         assert_eq!(q["query"]["filters"]["misc_filters"]["filters"]["quality"]["min"], 18);

@@ -85,6 +85,10 @@ pub struct Item {
     pub corrupted: bool,
     pub identified: bool,
     pub mirrored: bool,
+    #[serde(default)]
+    pub fractured: bool,
+    #[serde(default)]
+    pub synthesised: bool,
     pub influences: Vec<String>,
     pub mods: Vec<ItemMod>,
     /// Weapon properties as the item shows them (after its mods and quality).
@@ -183,6 +187,8 @@ pub fn parse(text: &str) -> Option<Item> {
         corrupted: false,
         identified: true,
         mirrored: false,
+        fractured: false,
+        synthesised: false,
         influences: Vec::new(),
         mods: Vec::new(),
         weapon: WeaponProps::default(),
@@ -208,6 +214,12 @@ pub fn parse(text: &str) -> Option<Item> {
         if matches!(item.rarity, Rarity::Magic | Rarity::Rare | Rarity::Unique | Rarity::Normal) {
             parse_mods(section, &mut item);
         }
+    }
+    if item.mods.iter().any(|m| m.kind == ModKind::Fractured) {
+        item.fractured = true;
+    }
+    if item.type_line.starts_with("Synthesised ") {
+        item.synthesised = true;
     }
     Some(item)
 }
@@ -264,6 +276,8 @@ fn parse_flags(section: &[&str], item: &mut Item) -> bool {
             "Corrupted" => item.corrupted = true,
             "Unidentified" => item.identified = false,
             "Mirrored" => item.mirrored = true,
+            "Fractured Item" => item.fractured = true,
+            "Synthesised Item" => item.synthesised = true,
             l if l.ends_with(" Item") && INFLUENCES.contains(&l.trim_end_matches(" Item")) => {
                 item.influences.push(l.trim_end_matches(" Item").to_string())
             }

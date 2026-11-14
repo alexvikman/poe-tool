@@ -194,8 +194,8 @@ impl PriceService {
             None
         };
         let query = match &gem {
-            Some((base, disc)) => trade::build_query(item, base, Some(disc), filters, options),
-            None => trade::build_query(item, base_type, None, filters, options),
+            Some((base, disc)) => trade::build_query(item, base, Some(disc), filters, options, league),
+            None => trade::build_query(item, base_type, None, filters, options, league),
         };
         self.trade.search(&self.http, league, query).await
     }
