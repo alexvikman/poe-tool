@@ -151,7 +151,8 @@ pub fn parse(text: &str) -> Option<Item> {
         .iter()
         .find_map(|l| l.strip_prefix("Item Class: "))?
         .to_string();
-    let rarity = match header.iter().find_map(|l| l.strip_prefix("Rarity: "))? {
+    // Some items have no rarity line at all (Wickerman viscera, for one).
+    let rarity = match header.iter().find_map(|l| l.strip_prefix("Rarity: ")).unwrap_or_default() {
         "Normal" => Rarity::Normal,
         "Magic" => Rarity::Magic,
         "Rare" => Rarity::Rare,
@@ -521,6 +522,29 @@ Right click this item then left click a rare item to apply it.",
         assert_eq!(item.type_line, "Chaos Orb");
         assert_eq!(item.stack_size, Some(1234));
         assert!(item.mods.is_empty());
+    }
+
+    #[test]
+    fn parses_an_item_without_a_rarity() {
+        let item = parse(
+            "Item Class: Viscera
+Inquisitor's Head
+--------
+Head
+--------
+Item Level: 64
+--------
+{ Implicit Modifier }
+Causes Bleeding on Melee Critical Strike — Unscalable Value
+(Bleeding deals Physical Damage over time, based on the base Physical Damage of the Skill. Damage is 200% higher while moving)
+--------
+Take this to the Wickerman in a town or hideout to attach it.",
+        )
+        .unwrap();
+        assert_eq!(item.item_class, "Viscera");
+        assert_eq!(item.rarity, Rarity::Other);
+        assert_eq!(item.type_line, "Inquisitor's Head");
+        assert_eq!(item.item_level, Some(64));
     }
 
     #[test]
