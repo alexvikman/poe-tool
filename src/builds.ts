@@ -91,6 +91,8 @@ export interface TreeView {
   sockets: Record<string, number>;
   /** Mastery node id → its chosen effect. */
   masteryPicks: Record<string, string>;
+  /** Allocated node id → the tattoo or runegraft that replaces it. */
+  overrides: Record<string, { name: string; stats: string[] }>;
 }
 
 /** A build in the Builds list. */

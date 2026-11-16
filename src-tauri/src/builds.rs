@@ -327,8 +327,18 @@ pub struct TreeView {
     pub sockets: BTreeMap<u32, usize>,
     /// Mastery node id → its chosen effect.
     pub mastery_picks: BTreeMap<u32, String>,
+    /// Allocated node id → the tattoo or runegraft that replaces it.
+    pub overrides: BTreeMap<u32, NodeOverride>,
     #[serde(skip)]
     mastery_effects: Vec<(u32, u32)>,
+}
+
+/// A tattoo or runegraft on a passive: its name and what it does instead.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeOverride {
+    pub name: String,
+    pub stats: Vec<String>,
 }
 
 /// Reads a build's XML.
@@ -748,11 +758,22 @@ fn split_tags(line: &str) -> (Vec<&str>, &str) {
 
 /// A passive tree (PoB's "Spec"): its nodes, chosen masteries and jewels.
 fn read_spec(spec: &roxmltree::Node, texts: &ItemTexts) -> TreeView {
-    let nodes = spec
+    let nodes: Vec<u32> = spec
         .attribute("nodes")
         .unwrap_or_default()
         .split(',')
         .filter_map(|n| n.trim().parse().ok())
+        .collect();
+    // PoB keeps tattoos on passives the tree no longer has; only allocated ones count.
+    let overrides = spec
+        .descendants()
+        .filter(|n| n.has_tag_name("Override"))
+        .filter_map(|o| {
+            let node: u32 = o.attribute("nodeId")?.parse().ok()?;
+            let stats = o.text().unwrap_or_default().lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect();
+            Some((node, NodeOverride { name: o.attribute("dn")?.trim().to_string(), stats }))
+        })
+        .filter(|(node, _)| nodes.contains(node))
         .collect();
     // "{4492,5356},{…}": a mastery node and its chosen effect.
     let mastery_effects = spec
@@ -779,6 +800,7 @@ fn read_spec(spec: &roxmltree::Node, texts: &ItemTexts) -> TreeView {
         jewels,
         sockets,
         nodes,
+        overrides,
         mastery_effects,
         ..Default::default()
     }
@@ -1818,6 +1840,31 @@ mod tests {
         assert!(quest_reward(&marauder));
         assert!(view.skill_sets.iter().flat_map(|s| &s.groups).any(|g| g.source.as_deref() == Some("The Yielding Mortality")));
         assert!(!tree.keystones.is_empty());
+    }
+
+    #[test]
+    fn reads_tattoos_and_runegrafts_on_allocated_passives() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build2.code");
+        let Ok(code) = std::fs::read_to_string(path) else { return };
+        let view = parse(&decode(&code).unwrap()).unwrap();
+        let lvl96 = view.trees.iter().find(|t| t.title.as_deref() == Some("Lvl 96")).unwrap();
+        assert_eq!(
+            lvl96.overrides.get(&4139),
+            Some(&NodeOverride {
+                name: "Runegraft of Treachery".into(),
+                stats: vec![
+                    "15% increased Reservation Efficiency of Skills".into(),
+                    "Auras from your Skills which affect Allies also affect Enemies".into(),
+                    "Limited to 1 Runegraft of Treachery".into(),
+                ],
+            })
+        );
+        assert_eq!(lvl96.overrides.len(), 1);
+        // The Deep Delve tree keeps tattoos on three passives it doesn't take.
+        let delve = view.trees.last().unwrap();
+        assert!(!delve.overrides.contains_key(&29937));
+        assert!(delve.overrides.keys().all(|n| delve.nodes.contains(n)));
+        assert!(delve.overrides.len() > 30);
     }
 
     /// A build with twelve loadouts (pobb.in/OvzQ5WyXeQTF), saved next to the tests.

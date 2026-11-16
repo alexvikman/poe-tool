@@ -83,8 +83,10 @@ export function PassiveTree({
     redraw();
   }
 
+  // Switching trees keeps the view where it is, so what changed stands out.
   useLayoutEffect(() => {
-    fit();
+    if (camera.current) redraw();
+    else fit();
   }, [shown]);
 
   useEffect(() => {
@@ -337,7 +339,12 @@ export function PassiveTree({
           {jewel ? (
             <ItemTooltip item={jewel.item} />
           ) : (
-            <NodeText node={hover.node} pick={tree.masteryPicks[hover.node.id]} allocated={allocated.has(hover.node.id)} />
+            <NodeText
+              node={hover.node}
+              pick={tree.masteryPicks[hover.node.id]}
+              override={tree.overrides?.[hover.node.id]}
+              allocated={allocated.has(hover.node.id)}
+            />
           )}
         </NodeTip>
       )}
@@ -371,8 +378,31 @@ function NodeTip({ x, y, children }: { x: number; y: number; children: React.Rea
   );
 }
 
-function NodeText({ node, pick, allocated }: { node: TreeNode; pick: string | undefined; allocated: boolean }) {
+function NodeText({
+  node,
+  pick,
+  override,
+  allocated,
+}: {
+  node: TreeNode;
+  pick: string | undefined;
+  override: { name: string; stats: string[] } | undefined;
+  allocated: boolean;
+}) {
   const kind = node.ascendancy ? "ascendancy" : node.kind;
+  if (override) {
+    return (
+      <div className="node-tip node-tip-override">
+        <div className="node-tip-name">{override.name}</div>
+        {override.stats.map((s, i) => (
+          <div key={i} className="node-tip-stat">
+            {s}
+          </div>
+        ))}
+        <div className="node-tip-note muted">In place of {node.name}</div>
+      </div>
+    );
+  }
   return (
     <div className={`node-tip node-tip-${kind}`}>
       <div className="node-tip-name">{node.name || "Jewel Socket"}</div>

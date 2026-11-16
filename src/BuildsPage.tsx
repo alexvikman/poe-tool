@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   buildView,
@@ -17,6 +17,7 @@ import {
 import { addGroup, listGroups, type HitItem, type SearchGroup } from "./searches";
 import { HoverCard, ItemPicture, ItemTooltip } from "./ItemView";
 import { PassiveTree } from "./PassiveTree";
+import { TreeSummary, useTreeLayout } from "./TreeSummary";
 import { perfNote, timed } from "./perf";
 
 function remembered(): string | null {
@@ -185,6 +186,20 @@ function Build({
   const [sel, setSel] = useState<Loadout | null>(null);
   // Stats PoB calculated for other loadouts, by their sets.
   const [calcs, setCalcs] = useState<Record<string, Calc>>({});
+  // The tree, open over the whole page; the page's scroll is kept for coming back.
+  const [treeOpen, setTreeOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const scrolled = useRef(0);
+  const layout = useTreeLayout();
+
+  function openTree() {
+    scrolled.current = root.current?.closest(".searches-main")?.scrollTop ?? 0;
+    setTreeOpen(true);
+  }
+  useLayoutEffect(() => {
+    const page = root.current?.closest(".searches-main");
+    if (!treeOpen && page) page.scrollTop = scrolled.current;
+  }, [treeOpen]);
 
   // Asks PoB for loadouts' stats, all in one go, and keeps them for this build.
   function calculate(picks: Loadout[]) {
@@ -253,8 +268,20 @@ function Build({
   const calc = exported ? undefined : (calcs[setsKey(sel)] ?? calcCache.get(`${build.id}|${setsKey(sel)}`));
   const stats = exported ? view.stats : (calc?.stats ?? view.stats);
 
+  if (treeOpen && tree) {
+    return (
+      <TreeScreen
+        view={view}
+        value={sel.tree}
+        onPick={(t) => setSel({ ...sel, tree: t })}
+        onClose={() => setTreeOpen(false)}
+        layout={layout}
+      />
+    );
+  }
+
   return (
-    <div className="build">
+    <div className="build" ref={root}>
       <header className="build-head">
         <div className="build-title-line">
           <h1>
@@ -352,13 +379,16 @@ function Build({
               Tree · {tree.points} passives
               {tree.ascendancyPoints > 0 && `, ${tree.ascendancyPoints} ascendancy`}
             </div>
-            <SetPick sets={view.trees} value={sel.tree} onPick={(t) => setSel({ ...sel, tree: t })} />
+            <div className="tree-head-actions">
+              <SetPick sets={view.trees} value={sel.tree} onPick={(t) => setSel({ ...sel, tree: t })} />
+              <button className="btn primary small-btn" onClick={openTree}>
+                Open tree
+              </button>
+            </div>
           </div>
-          <PassiveTree tree={tree} className={view.class} ascendancy={view.ascendancy} />
-          <NodeList title="Keystones" names={tree.keystones} kind="keystone" />
+          <TreeSummary tree={tree} layout={layout} />
           <NodeList title={view.ascendancy ?? "Ascendancy"} names={tree.ascendancyNotables} kind="ascendancy" />
           <NodeList title="Notables" names={tree.notables} kind="notable" />
-          <NodeList title="Masteries" names={tree.masteries} kind="mastery" />
         </section>
       )}
 
@@ -753,6 +783,69 @@ function PobText({ text }: { text: string }) {
 }
 
 /* Tree */
+
+/** The tree over the whole page, as Path of Building shows it: the build's trees to
+ *  switch between above it (← → too), what each takes beside it. Esc goes back. */
+function TreeScreen({
+  view,
+  value,
+  onPick,
+  onClose,
+  layout,
+}: {
+  view: BuildView;
+  value: number;
+  onPick: (tree: number) => void;
+  onClose: () => void;
+  layout: ReturnType<typeof useTreeLayout>;
+}) {
+  const tree = view.trees[value];
+  const count = view.trees.length;
+
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement | null)?.closest?.("input, select, textarea")) return;
+      if (e.key === "Escape") onClose();
+      else if (e.key === "ArrowLeft" && value > 0) onPick(value - 1);
+      else if (e.key === "ArrowRight" && value < count - 1) onPick(value + 1);
+      else return;
+      e.preventDefault();
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [value, count, onPick, onClose]);
+
+  return (
+    <div className="tree-screen">
+      <div className="tree-screen-bar">
+        <button className="btn small-btn" onClick={onClose} title="Back to the build (Esc)">
+          ← Build
+        </button>
+        {count > 1 && (
+          <div className="tree-tabs" title="← and → switch trees">
+            {view.trees.map((t, i) => (
+              <button key={i} className={`tree-tab ${i === value ? "active" : ""}`} onClick={() => onPick(i)}>
+                {t.title ?? `Tree ${i + 1}`}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="tree-screen-body">
+        <PassiveTree tree={tree} className={view.class} ascendancy={view.ascendancy} />
+        <aside className="tree-screen-side">
+          <div className="label">
+            {tree.points} passives
+            {tree.ascendancyPoints > 0 && `, ${tree.ascendancyPoints} ascendancy`}
+          </div>
+          <TreeSummary tree={tree} layout={layout} />
+          <NodeList title={view.ascendancy ?? "Ascendancy"} names={tree.ascendancyNotables} kind="ascendancy" />
+          <NodeList title="Notables" names={tree.notables} kind="notable" />
+        </aside>
+      </div>
+    </div>
+  );
+}
 
 function NodeList({ title, names, kind }: { title: string; names: string[]; kind: string }) {
   if (names.length === 0) return null;
