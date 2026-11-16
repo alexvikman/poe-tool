@@ -48,10 +48,16 @@ impl SearchOptions {
             // Gear and gems are priced by whether they are corrupted.
             corrupted: (gear || matches!(item.rarity, Rarity::Unique | Rarity::Gem)).then_some(item.corrupted),
             instant_buyout,
-            // Rares sell by what they are, not by their exact base.
-            category: category::trade_category(&item.item_class)
-                .filter(|_| gear && !cluster)
-                .map(|(id, label)| Toggle { value: id.to_string(), label: label.to_string(), enabled: true }),
+            // Rares sell by what they are, not by their exact base. Viscera can be
+            // widened to every part of their kind, but each part does its own thing.
+            category: if item.item_class == "Viscera" {
+                let (id, label) = category::viscera_category(item.slot.as_deref());
+                Some(Toggle { value: id.to_string(), label: label.to_string(), enabled: false })
+            } else {
+                category::trade_category(&item.item_class)
+                    .filter(|_| gear && !cluster)
+                    .map(|(id, label)| Toggle { value: id.to_string(), label: label.to_string(), enabled: true })
+            },
             item_level: item
                 .item_level
                 .filter(|_| gear && item.item_class != "Jewels")
@@ -562,7 +568,10 @@ pub fn build_query(
                 }
             }
         }
-        _ => query["type"] = json!(item.type_line),
+        _ => match options.category.as_ref().filter(|c| c.enabled) {
+            Some(c) => query["filters"]["type_filters"] = json!({ "filters": { "category": { "option": c.value } } }),
+            None => query["type"] = json!(item.type_line),
+        },
     }
     if item.links >= 5 {
         query["filters"]["socket_filters"] = json!({ "filters": { "links": { "min": item.links } } });
@@ -640,6 +649,23 @@ mod tests {
         assert!(l.acquire().is_none());
         assert!(l.acquire().is_none());
         assert!(l.acquire().is_some());
+    }
+
+    #[test]
+    fn query_for_a_viscera_searches_its_type_or_its_part() {
+        let item = super::super::item::parse(
+            "Item Class: Viscera\nInquisitor's Head\n--------\nHead\n--------\nItem Level: 64",
+        )
+        .unwrap();
+        let mut options = SearchOptions::for_item(&item, true);
+        let q = build_query(&item, "Inquisitor's Head", None, &[], &options, "Covens");
+        assert_eq!(q["query"]["type"], "Inquisitor's Head");
+        assert!(q["query"]["filters"]["type_filters"].is_null());
+
+        options.category.as_mut().unwrap().enabled = true;
+        let q = build_query(&item, "Inquisitor's Head", None, &[], &options, "Covens");
+        assert!(q["query"]["type"].is_null());
+        assert_eq!(q["query"]["filters"]["type_filters"]["filters"]["category"]["option"], "viscera.head");
     }
 
     #[test]

@@ -38,9 +38,34 @@ const CATEGORIES: &[(&str, &str, &str)] = &[
     ("Tinctures", "tincture", "Tincture"),
 ];
 
+/// (the Wickerman part a viscera is, as the game writes it, trade site category id,
+/// label). The trade site says Arm, Body and Leg; both spellings are taken.
+const VISCERA: &[(&[&str], &str, &str)] = &[
+    (&["Head"], "viscera.head", "Head Viscera"),
+    (&["Arm", "Upper Limb"], "viscera.arm", "Arm Viscera"),
+    (&["Body", "Torso"], "viscera.body", "Body Viscera"),
+    (&["Leg", "Lower Limb"], "viscera.leg", "Leg Viscera"),
+];
+
 /// A label for a trade site category id: "weapon.twosword" → "Two-Handed Sword".
 pub fn category_label(id: &str) -> Option<&'static str> {
-    CATEGORIES.iter().find(|(_, c, _)| *c == id).map(|(_, _, label)| *label)
+    CATEGORIES
+        .iter()
+        .map(|(_, c, label)| (*c, *label))
+        .chain(VISCERA.iter().map(|(_, c, label)| (*c, *label)))
+        .chain([("viscera", "Viscera")])
+        .find(|(c, _)| *c == id)
+        .map(|(_, label)| label)
+}
+
+/// The trade site's category id and a label, for a viscera's Wickerman part; any
+/// viscera when the part is one it doesn't know.
+pub fn viscera_category(slot: Option<&str>) -> (&'static str, &'static str) {
+    VISCERA
+        .iter()
+        .find(|(parts, _, _)| slot.is_some_and(|s| parts.contains(&s)))
+        .map(|(_, id, label)| (*id, *label))
+        .unwrap_or(("viscera", "Viscera"))
 }
 
 /// The trade site's category id and a label, for an item class.
@@ -81,5 +106,13 @@ mod tests {
         assert!(!is_weapon("Quivers"));
         assert!(is_armour("Gloves"));
         assert_eq!(trade_category("Stackable Currency"), None);
+    }
+
+    #[test]
+    fn maps_viscera_parts() {
+        assert_eq!(viscera_category(Some("Head")), ("viscera.head", "Head Viscera"));
+        assert_eq!(viscera_category(Some("Torso")), ("viscera.body", "Body Viscera"));
+        assert_eq!(viscera_category(None), ("viscera", "Viscera"));
+        assert_eq!(category_label("viscera.leg"), Some("Leg Viscera"));
     }
 }

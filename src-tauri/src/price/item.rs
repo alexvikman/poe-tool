@@ -97,6 +97,9 @@ pub struct Item {
     /// Armour properties as the item shows them.
     #[serde(default)]
     pub armour: ArmourProps,
+    /// The Wickerman part a viscera is ("Head"), from the line under its name.
+    #[serde(default)]
+    pub slot: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -194,11 +197,15 @@ pub fn parse(text: &str) -> Option<Item> {
         mods: Vec::new(),
         weapon: WeaponProps::default(),
         armour: ArmourProps::default(),
+        slot: None,
     };
     if item.name.is_none() {
         item.name = Some(item.type_line.clone());
     }
 
+    if let Some([slot]) = sections.get(1).map(Vec::as_slice).filter(|_| item.item_class == "Viscera") {
+        item.slot = Some(slot.to_string());
+    }
     for section in &sections[1..] {
         if section[0] == "Requirements:" {
             continue;
@@ -545,6 +552,7 @@ Take this to the Wickerman in a town or hideout to attach it.",
         assert_eq!(item.rarity, Rarity::Other);
         assert_eq!(item.type_line, "Inquisitor's Head");
         assert_eq!(item.item_level, Some(64));
+        assert_eq!(item.slot.as_deref(), Some("Head"));
     }
 
     #[test]
