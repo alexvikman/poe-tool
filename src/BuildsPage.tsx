@@ -273,7 +273,8 @@ function Build({
       <TreeScreen
         view={view}
         value={sel.tree}
-        onPick={(t) => setSel({ ...sel, tree: t })}
+        groups={groups}
+        onPick={(t) => setSel(view.loadouts.find((l) => l.tree === t) ?? { ...sel, tree: t })}
         onClose={() => setTreeOpen(false)}
         layout={layout}
       />
@@ -785,16 +786,20 @@ function PobText({ text }: { text: string }) {
 /* Tree */
 
 /** The tree over the whole page, as Path of Building shows it: the build's trees to
- *  switch between above it (← → too), what each takes beside it. Esc goes back. */
+ *  switch between above it (← → too), its gems and what it takes beside it. A tree
+ *  brings its loadout's gems along, so stepping through the trees shows what to socket
+ *  at each point while levelling. Esc goes back. */
 function TreeScreen({
   view,
   value,
+  groups,
   onPick,
   onClose,
   layout,
 }: {
   view: BuildView;
   value: number;
+  groups: GemGroup[];
   onPick: (tree: number) => void;
   onClose: () => void;
   layout: ReturnType<typeof useTreeLayout>;
@@ -834,6 +839,18 @@ function TreeScreen({
       <div className="tree-screen-body">
         <PassiveTree tree={tree} className={view.class} ascendancy={view.ascendancy} />
         <aside className="tree-screen-side">
+          {groups.some((g) => g.gems.length > 0) && (
+            <>
+              <div className="label">Gems</div>
+              <div className="gem-groups">
+                {groups
+                  .filter((g) => g.gems.length > 0)
+                  .map((g, i) => (
+                    <GemGroupCard key={i} group={g} />
+                  ))}
+              </div>
+            </>
+          )}
           <div className="label">
             {tree.points} passives
             {tree.ascendancyPoints > 0 && `, ${tree.ascendancyPoints} ascendancy`}

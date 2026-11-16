@@ -2569,7 +2569,7 @@ select {
 
 .tree-screen-body {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 1fr) 340px;
   min-height: 0;
 }
 
@@ -2589,8 +2589,20 @@ select {
   background: var(--panel);
 }
 
-.tree-screen-side .tree-cards {
+.tree-screen-side .tree-cards,
+.tree-screen-side .gem-groups {
   grid-template-columns: minmax(0, 1fr);
+}
+
+.tree-screen-side .gem-groups {
+  margin-top: 0;
+  gap: 8px;
+}
+
+.tree-screen-side .gem-group {
+  background: #0d1017;
+  font-size: 13.5px;
+  padding: 8px 11px;
 }
 
 @container (max-width: 760px) {
